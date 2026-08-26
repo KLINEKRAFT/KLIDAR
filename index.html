@@ -176,9 +176,9 @@
   .seg button[disabled]{opacity:.3;cursor:default;}
   .seg button:focus-visible{outline:1px solid var(--fg);outline-offset:-4px;}
   .seg.wrap{grid-auto-flow:row;grid-template-columns:repeat(5,1fr);grid-auto-columns:auto;}
-  .seg.wrap.four{grid-template-columns:repeat(4,1fr);}
-  .seg.wrap.four button{font-size:8px;letter-spacing:.02em;padding:0 2px;}
-  .seg.wrap.four button:nth-child(-n+4){border-bottom:1px solid var(--line);}
+  .seg.wrap.five{grid-template-columns:repeat(5,1fr);}
+  .seg.wrap.five button{font-size:8px;letter-spacing:0;padding:0 1px;}
+  .seg.wrap.five button:nth-child(-n+5){border-bottom:1px solid var(--line);}
   .seg.wrap button{border-right:1px solid var(--line);font-size:9px;letter-spacing:.06em;}
   .ramp{display:flex;height:24px;width:100%;border:0;padding:0;background:none;cursor:pointer;}
   .ramp i{flex:1;display:block;transition:background .2s linear;}
@@ -364,7 +364,7 @@
 
     <div class="row">
       <div class="lab"><span>Surface shading</span></div>
-      <div class="seg wrap four" id="shade">
+      <div class="seg wrap five" id="shade">
         <button data-s="0" aria-pressed="true">Hillshade</button>
         <button data-s="6" aria-pressed="false">Multi-dir</button>
         <button data-s="1" aria-pressed="false">Tinted</button>
@@ -373,6 +373,8 @@
         <button data-s="4" aria-pressed="false">Sky-view</button>
         <button data-s="5" aria-pressed="false">Openness</button>
         <button data-s="7" aria-pressed="false">VAT</button>
+        <button data-s="8" aria-pressed="false">RRIM</button>
+        <button data-s="9" aria-pressed="false">MSTP</button>
       </div>
       <div class="lab" style="margin:12px 0 0"><span>Sun azimuth</span><b id="azval">315°</b></div>
       <input type="range" id="az" min="0" max="359" value="315" aria-label="Sun azimuth">
@@ -446,7 +448,7 @@
       </div>
     </div>
 
-    <div class="mark"><span>v0.9</span><b>Klinekraft</b></div>
+    <div class="mark"><span>v0.9.1</span><b>Klinekraft</b></div>
   </div>
 </section>
 
@@ -569,7 +571,7 @@ let GW=0, GH=0, CELL=1, SPAN=1, SPANX=1, SPANZ=1;
 let Zm=null, Hn=null, gx=null, gz=null, slope=null;
 let zMin=0, zMax=1, zRange=1, hTex=null, lrmTex=null, hasPoints=true;
 let SVF=null, OPN=null, POS=null;                   // horizon products, built on demand
-let svfTex=null, opnTex=null, posTex=null;
+let svfTex=null, opnTex=null, posTex=null, mstpTex=null;
 let demName='Demo tile', demNote='synthetic';
 
 function demoDEM(){
@@ -643,6 +645,56 @@ function pctRange(arr,loQ,hiQ){
   if(hi-lo<1e-6){ hi=lo+1e-6; }
   return [lo,hi];
 }
+/* Multi-scale topographic position — Lindsay/Cockburn/Russell, as packaged by
+   the Relief Visualization Toolbox.
+
+     DEV(sigma) = (z - mean_sigma) / stdev_sigma
+
+   is elevation deviation standardised by local roughness, so it is close to
+   slope-invariant: a 40 cm rise reads the same on a terrace as on a floodplain.
+   Three bands of scale go into red, green and blue, so the COLOUR of a feature
+   tells you the scale at which it stands out — fine detail red, landform-scale
+   blue, something that reads at every scale white.
+
+   Scales are in metres, not cells, so a tile's resolution does not change what
+   the bands mean. mean and stdev both come from the sliding-window blur:
+   var = E[z^2] - E[z]^2. */
+const MSTPBANDS=[[1.5,5],[12,27],[55,100]], MSTPK=2.2;
+function buildMSTP(){
+  const T=GW*GH, sq=new Float32Array(T);
+  for(let d=0;d<T;d++) sq[d]=Zm[d]*Zm[d];
+  const band=[];
+  for(const pair of MSTPBANDS){
+    const acc=new Float32Array(T);
+    for(const sM of pair){
+      const r=Math.max(1,sM/CELL);
+      const mean=blur(Zm,r,3), meanSq=blur(sq,r,3);
+      for(let d=0;d<T;d++){
+        const v=meanSq[d]-mean[d]*mean[d];
+        const sd=v>1e-9?Math.sqrt(v):0;
+        acc[d]+= sd>1e-6 ? (Zm[d]-mean[d])/sd : 0;
+      }
+    }
+    for(let d=0;d<T;d++) acc[d]/=pair.length;
+    band.push(acc);
+  }
+  // symmetric clip at +/-k standard deviations, then a mild lift
+  const out=new Uint8Array(T*4);
+  for(let d=0;d<T;d++){
+    for(let c=0;c<3;c++){
+      let v=(band[c][d]/MSTPK+1)*0.5;
+      v=Math.pow(Math.max(0,Math.min(1,v)),0.85);
+      out[d*4+c]=v*255;
+    }
+    out[d*4+3]=255;
+  }
+  const t=new THREE.DataTexture(out,GW,GH,THREE.RGBAFormat);
+  // three independent 8-bit channels, so hardware filtering is safe here
+  t.minFilter=t.magFilter=THREE.LinearFilter;
+  t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.needsUpdate=true;
+  return t;
+}
+
 function packTex(arr,lo,hi,gw,gh){
   const d=new Uint8Array(gw*gh*4);
   for(let i=0;i<gw*gh;i++){
@@ -808,12 +860,12 @@ const surfMat=new THREE.ShaderMaterial({
   uniforms:{uH:{value:null},uLrm:{value:null},uTexel:{value:new THREE.Vector2(1/160,1/160)},uCell:{value:1},uRange:{value:1},
     uVex:{value:1},uSun:{value:new THREE.Vector3(0,1,0)},uShade:{value:0},
     uLut:{value:null},uBands:{value:0},uClip:{value:new THREE.Vector2(0,1)},uHasLrm:{value:0},
-    uSvfT:{value:null},uOpnT:{value:null},uPosT:{value:null},uHasAux:{value:0},
+    uSvfT:{value:null},uOpnT:{value:null},uPosT:{value:null},uMstp:{value:null},uHasAux:{value:0},
     uAlt:{value:25}},
   vertexShader:'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
   fragmentShader:[
     'precision highp float;',
-    'uniform sampler2D uH,uLut,uLrm,uSvfT,uOpnT,uPosT;',
+    'uniform sampler2D uH,uLut,uLrm,uSvfT,uOpnT,uPosT,uMstp;',
     'uniform vec2 uTexel;',
     'uniform float uCell,uRange,uVex,uShade,uBands,uHasLrm,uHasAux,uAlt;',
     'uniform vec3 uSun; uniform vec2 uClip;',
@@ -885,7 +937,7 @@ const surfMat=new THREE.ShaderMaterial({
     // open surfaces bright), positive openness laid over it to lift convex
     // micro-relief, then darkened by slope to give scarps and banks their edge.
     // One image that shows cuts AND mounds without committing to a method.
-    '  else {',
+    '  else if(uShade < 7.5){',
     '    float a = uHasAux>0.5 ? dec(texture2D(uSvfT,clamp(vUv,0.0,1.0))) : 0.5;',
     '    float b = uHasAux>0.5 ? dec(texture2D(uPosT,clamp(vUv,0.0,1.0))) : 0.5;',
     '    float ov = a < 0.5 ? (2.0*a*b) : (1.0 - 2.0*(1.0-a)*(1.0-b));',
@@ -897,6 +949,17 @@ const surfMat=new THREE.ShaderMaterial({
     // deepens the midtones and gives it back. Tunable by eye, as in RVT.
     '    v = pow(clamp(v,0.0,1.0), 1.35);',
     '    col = vec3(v); }',
+    // RRIM — red relief image map, Chiba/Kaneta/Suzuki 2008. Redness carries
+    // slope, lightness carries differential openness, so ridges read white,
+    // hollows dark and every scarp red regardless of sun position. Needs
+    // nothing new: the openness texture and the shader normal already exist.
+    '  else if(uShade < 8.5){',
+    '    float i = uHasAux>0.5 ? dec(texture2D(uOpnT,clamp(vUv,0.0,1.0))) : 0.5;',
+    '    float s = clamp(acos(clamp(n.y,-1.0,1.0))/0.9, 0.0, 1.0);',
+    '    col = vec3(1.0, 1.0-s, 1.0-s) * clamp(i,0.0,1.0); }',
+    // MSTP — colour is scale, not height. Sampled straight through.
+    '  else {',
+    '    col = uHasAux>0.5 ? texture2D(uMstp,clamp(vUv,0.0,1.0)).rgb : vec3(0.5); }',
     '  gl_FragColor = vec4(col,1.0);',
     '}'].join('\n')
 });
@@ -992,11 +1055,13 @@ function installDEM(dem){
   if(svfTex){svfTex.dispose();svfTex=null;}
   if(opnTex){opnTex.dispose();opnTex=null;}
   if(posTex){posTex.dispose();posTex=null;}
+  if(mstpTex){mstpTex.dispose();mstpTex=null;}
   SVF=null; OPN=null; POS=null;
   surfMat.uniforms.uHasAux.value=0;
   surfMat.uniforms.uSvfT.value=null;
   surfMat.uniforms.uOpnT.value=null;
   surfMat.uniforms.uPosT.value=null;
+  surfMat.uniforms.uMstp.value=null;
   surfMat.uniforms.uH.value=hTex;
   surfMat.uniforms.uTexel.value.set(1/GW,1/GH);
   surfMat.uniforms.uCell.value=CELL;
@@ -1653,6 +1718,19 @@ function paintRamp(){
 function paintLegend(){
   const el=$('#legendbar');el.innerHTML='';
   const sh=surfMat.uniforms.uShade.value;
+  // MSTP colours by scale, not by height: the ramp shows what each channel means
+  if(mode!=='points'&&sh===9){
+    const stops=['#e05a5a','#5ae05a','#5a7ae0'];
+    for(let i=0;i<33;i++){const b=document.createElement('i');
+      b.style.background=stops[Math.min(2,(i/11)|0)];el.appendChild(b);}
+    $('#lo').textContent='Fine 1–5 m';$('#hi').textContent='Broad 55–100 m';return;
+  }
+  // RRIM: lightness is the openness difference, redness is slope
+  if(mode!=='points'&&sh===8){
+    for(let i=0;i<34;i++){const b=document.createElement('i');const v=Math.round((i/33)*255);
+      b.style.background='rgb('+v+','+Math.round(v*0.45)+','+Math.round(v*0.45)+')';el.appendChild(b);}
+    $('#lo').textContent='Hollow';$('#hi').textContent='Ridge';return;
+  }
   // hillshade, multi-hillshade and VAT all render greyscale, so the ramp is
   // greyscale too — only the end labels differ
   if(mode!=='points'&&(sh===0||sh===6||sh===7)){
@@ -1686,7 +1764,8 @@ function paintSwatches(){CSETS[PAL[pal].cls][theme].forEach((h,i)=>{$('#sw'+i).s
 function hud(){
   $('#capsub').textContent=mode==='points'?'Point cloud':mode==='surface'?'Bare earth':'Points + surface';
   const shd=['Hillshade','Tinted relief','Slope','Local relief','Sky-view factor',
-             'Openness','Multi-hillshade','VAT composite'][surfMat.uniforms.uShade.value];
+             'Openness','Multi-hillshade','VAT composite','Red relief',
+             'Multi-scale position'][surfMat.uniforms.uShade.value];
   $('#cap').textContent=mode==='points'
     ?(sep<.02?(vex>1.05?'Exaggerated':'Composite'):(sepBy==='class'?'Class split':'Elevation split')):shd;
   $('#spine').textContent=mode==='points'?'Point cloud':'Bare earth DEM · '+GW+' × '+GH;
@@ -1973,15 +2052,20 @@ function buildShadeTex(v){
     const m=Math.max(Math.abs(lo),Math.abs(hi))||1;
     lrmTex=packTex(L,-m,m,GW,GH);surfMat.uniforms.uLrm.value=lrmTex;surfMat.uniforms.uHasLrm.value=1;
   }
-  // 4 sky-view, 5 openness, 7 VAT (needs sky-view + positive openness together)
-  if(v===4||v===5||v===7){
+  if(v===9&&!mstpTex){
+    mstpTex=buildMSTP();
+    surfMat.uniforms.uMstp.value=mstpTex;
+    surfMat.uniforms.uHasAux.value=1;
+  }
+  // 4 sky-view, 5 openness, 7 VAT (sky-view + positive openness), 8 RRIM (openness)
+  if(v===4||v===5||v===7||v===8){
     needHorizon();
     if(!svfTex&&(v===4||v===7)){
       const [lo,hi]=pctRange(SVF,0.02,0.98);
       svfTex=packTex(SVF,lo,hi,GW,GH);
       surfMat.uniforms.uSvfT.value=svfTex;
     }
-    if(!opnTex&&v===5){
+    if(!opnTex&&(v===5||v===8)){
       // symmetric about zero so mid-ramp reads as genuinely flat ground
       const [lo,hi]=pctRange(OPN,0.02,0.98);
       const m=Math.max(Math.abs(lo),Math.abs(hi))||1;

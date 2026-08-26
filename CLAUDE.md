@@ -15,9 +15,9 @@ Personal project under KLINEKRAFT. Static site, deployed on Vercel.
 2. Gives the operator the controls that actually reveal subtle earthworks:
    movable sun, vertical exaggeration, contour banding, local relief model,
    slope shading, elevation clipping.
-3. Renders **sky-view factor**, **openness**, **multi-directional hillshade**
-   and a **VAT composite** — illumination-independent relief products that show
-   shallow earthworks a plain hillshade buries.
+3. Renders **sky-view factor**, **openness**, **multi-directional hillshade**,
+   **VAT**, **RRIM** and **MSTP** — illumination-independent relief products
+   that show shallow earthworks a plain hillshade buries.
 4. Runs **Terrain Scan** — a real geomorphometry pipeline that detects,
    measures, scores and ranks possible anthropogenic terrain features, then
    marks them on the map with the evidence that flagged them.
@@ -136,8 +136,14 @@ vertex normals.
   sky cannot be more than fully open — collapses exactly the convex features the
   measure exists to separate. `SVF` clamps, `POS` and `OPN` do not.
 - **`uShade` values are append-only.** 0 hillshade, 1 tinted, 2 slope, 3 local
-  relief, 4 sky-view, 5 openness, 6 multi-hillshade, 7 VAT. Presets and the
-  reset button reference them by number; renumbering breaks those silently.
+  relief, 4 sky-view, 5 openness, 6 multi-hillshade, 7 VAT, 8 RRIM, 9 MSTP.
+  Presets and the reset button reference them by number; renumbering breaks
+  those silently. The chain is a run of `else if` — only MSTP is a bare `else`,
+  so a new mode goes *before* it, never after.
+- **MSTP colours by scale, not by height.** Red is the 1.5–5 m band, green
+  12–27 m, blue 55–100 m, so a mound reads green-cyan and a terrace edge blue.
+  Its texture is three independent 8-bit channels, so `LinearFilter` is correct
+  there — unlike the packed height texture.
 - **Marker positions are DOM elements** projected each frame. Cheap at ~14, will
   not scale to hundreds.
 - **`segBind` / `segSet`** drive every segmented control. Buttons carry the value
@@ -200,7 +206,9 @@ carry its counter-indications. This is a screening tool, not an identifier.
 
 ## Style
 
-- Black and white chrome only. No red anywhere in the UI. No emojis.
+- Black and white chrome only. No emojis. Data products may use colour where
+  the colour carries information — RRIM's red is slope, MSTP's hue is scale —
+  but the chrome around them stays monochrome.
 - Helvetica Neue for display, IBM Plex Mono for all data and labels.
 - Hairline rules, zero border radius, heavy letterspacing on small caps.
 - Light and dark are both first-class; every color must be defined for both.
