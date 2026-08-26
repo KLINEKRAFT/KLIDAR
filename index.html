@@ -218,6 +218,11 @@
     font-size:9px;letter-spacing:.3em;text-transform:uppercase;color:var(--dim);
     display:flex;justify-content:space-between;}
   .mark b{color:var(--fg);font-weight:400;}
+  .fatal{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;
+    background:var(--bg);color:var(--fg);}
+  .fatal b{font-size:11px;font-weight:400;letter-spacing:.4em;text-transform:uppercase;}
+  .fatal span{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);line-height:2;}
   @media (max-height:680px){ .scalebar{display:none;} }
   @media (prefers-reduced-motion:reduce){*{transition:none !important;}}
 </style>
@@ -395,7 +400,7 @@
       </div>
     </div>
 
-    <div class="mark"><span>v0.7</span><b>Klinekraft</b></div>
+    <div class="mark"><span>v0.7.1</span><b>Klinekraft</b></div>
   </div>
 </section>
 
@@ -424,6 +429,16 @@
 <script>
 (function(){
 "use strict";
+if(!window.THREE){
+  document.getElementById('c').remove();
+  const d=document.createElement('div');
+  d.className='fatal mono';
+  d.innerHTML='<b>Renderer unavailable</b>'+
+    '<span>three.js could not be loaded from the network.</span>'+
+    '<span>Check the connection and reload.</span>';
+  document.body.appendChild(d);
+  return;
+}
 const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const $=s=>document.querySelector(s);
 const M2FT=3.28084;
@@ -503,7 +518,8 @@ const pRange=pMax-pMin;
 for(let i=0;i<N;i++)pElev[i]=(pos[i*3+1]-pMin)/pRange;
 
 /* ══ mutable terrain grid ══ */
-let G=0, CELL=1, SPAN=1, Zm=null, Hn=null, gx=null, gz=null, slope=null;
+let GW=0, GH=0, CELL=1, SPAN=1, SPANX=1, SPANZ=1;
+let Zm=null, Hn=null, gx=null, gz=null, slope=null;
 let zMin=0, zMax=1, zRange=1, hTex=null, lrmTex=null, hasPoints=true;
 let demName='Demo tile', demNote='synthetic';
 
@@ -517,81 +533,96 @@ function demoDEM(){
     const j=Math.max(0,Math.min(g-1,Math.round(((z+DSPAN)/(DSPAN*2))*(g-1))));
     const d=j*g+i; if(y<acc[d]) acc[d]=y;
   }
-  fillHoles(acc,g); smoothGrid(acc,g,2);
-  return {vals:acc,g,cell,name:'Demo tile',note:'synthetic, 100,000 pts'};
+  fillHoles(acc,g,g); smoothGrid(acc,g,g,2);
+  return {vals:acc,gw:g,gh:g,cell,name:'Demo tile',note:'synthetic, 100,000 pts'};
 }
-function fillHoles(a,g){
-  for(let pass=0;pass<10;pass++){
-    let filled=0; const cp=Float32Array.from(a);
-    for(let j=0;j<g;j++)for(let i=0;i<g;i++){
-      const d=j*g+i; if(isFinite(cp[d])) continue;
+/* Nearest-valid flood fill, O(cells) whatever the void size. The previous
+   version ran a capped 10 dilation passes and then collapsed everything still
+   unfilled to one arbitrary elevation, which turned large NODATA voids into a
+   flat plateau. */
+function fillHoles(a,gw,gh){
+  const T=gw*gh, q=new Int32Array(T), patched=new Uint8Array(T);
+  let head=0,tail=0;
+  for(let d=0;d<T;d++) if(isFinite(a[d])) q[tail++]=d;
+  if(!tail){ a.fill(0); return; }      // nothing valid anywhere
+  if(tail===T) return;                 // no holes
+  while(head<tail){
+    const d=q[head++], i=d%gw, j=(d/gw)|0, v=a[d];
+    for(let dj=-1;dj<=1;dj++)for(let di=-1;di<=1;di++){
+      const ii=i+di,jj=j+dj; if(ii<0||ii>=gw||jj<0||jj>=gh) continue;
+      const e=jj*gw+ii;
+      if(!patched[e]&&!isFinite(a[e])){ a[e]=v; patched[e]=1; q[tail++]=e; }
+    }
+  }
+  for(let p=0;p<2;p++){                // soften the nearest-neighbour patches
+    const cp=Float32Array.from(a);
+    for(let j=0;j<gh;j++)for(let i=0;i<gw;i++){
+      const d=j*gw+i; if(!patched[d]) continue;
       let s=0,n=0;
       for(let dj=-1;dj<=1;dj++)for(let di=-1;di<=1;di++){
-        const jj=j+dj,ii=i+di; if(jj<0||jj>=g||ii<0||ii>=g) continue;
-        const v=cp[jj*g+ii]; if(isFinite(v)){s+=v;n++;}
+        const jj=j+dj,ii=i+di; if(jj<0||jj>=gh||ii<0||ii>=gw) continue;
+        s+=cp[jj*gw+ii];n++;
       }
-      if(n){a[d]=s/n;filled++;}
+      a[d]=s/n;
     }
-    if(!filled) break;
   }
-  let any=0; for(let d=0;d<g*g;d++) if(isFinite(a[d])){any=a[d];break;}
-  for(let d=0;d<g*g;d++) if(!isFinite(a[d])) a[d]=any;
 }
-function smoothGrid(a,g,passes){
+function smoothGrid(a,gw,gh,passes){
   for(let p=0;p<passes;p++){
     const cp=Float32Array.from(a);
-    for(let j=0;j<g;j++)for(let i=0;i<g;i++){
+    for(let j=0;j<gh;j++)for(let i=0;i<gw;i++){
       let s=0,n=0;
       for(let dj=-1;dj<=1;dj++)for(let di=-1;di<=1;di++){
-        const jj=j+dj,ii=i+di; if(jj<0||jj>=g||ii<0||ii>=g) continue;
-        s+=cp[jj*g+ii];n++;
+        const jj=j+dj,ii=i+di; if(jj<0||jj>=gh||ii<0||ii>=gw) continue;
+        s+=cp[jj*gw+ii];n++;
       }
-      a[j*g+i]=s/n;
+      a[j*gw+i]=s/n;
     }
   }
 }
-function packTex(arr,lo,hi,g){
-  const d=new Uint8Array(g*g*4);
-  for(let i=0;i<g*g;i++){
+function packTex(arr,lo,hi,gw,gh){
+  const d=new Uint8Array(gw*gh*4);
+  for(let i=0;i<gw*gh;i++){
     const t=Math.max(0,Math.min(1,(arr[i]-lo)/(hi-lo||1))), v=Math.round(t*65535);
     d[i*4]=(v>>8)&255; d[i*4+1]=v&255; d[i*4+2]=0; d[i*4+3]=255;
   }
-  const t=new THREE.DataTexture(d,g,g,THREE.RGBAFormat);
+  const t=new THREE.DataTexture(d,gw,gh,THREE.RGBAFormat);
   t.minFilter=t.magFilter=THREE.NearestFilter;
   t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.needsUpdate=true; return t;
 }
 
-/* sliding-window box blur — O(G²) regardless of radius */
+/* sliding-window box blur — O(GW·GH) regardless of radius */
 function blur(src,r,passes){
-  r=Math.max(1,Math.min(G-1,Math.round(r)));
-  let a=Float32Array.from(src), b=new Float32Array(G*G);
+  r=Math.max(1,Math.min(Math.max(GW,GH)-1,Math.round(r)));
+  const cx=i=>Math.max(0,Math.min(GW-1,i)), cy=j=>Math.max(0,Math.min(GH-1,j));
+  let a=Float32Array.from(src), b=new Float32Array(GW*GH);
+  const w=2*r+1;
   for(let p=0;p<passes;p++){
-    for(let j=0;j<G;j++){
-      const o=j*G; let sum=0;
-      for(let i=-r;i<=r;i++) sum+=a[o+Math.max(0,Math.min(G-1,i))];
-      const w=2*r+1;
-      for(let i=0;i<G;i++){
+    for(let j=0;j<GH;j++){
+      const o=j*GW; let sum=0;
+      for(let i=-r;i<=r;i++) sum+=a[o+cx(i)];
+      for(let i=0;i<GW;i++){
         b[o+i]=sum/w;
-        sum-=a[o+Math.max(0,Math.min(G-1,i-r))];
-        sum+=a[o+Math.max(0,Math.min(G-1,i+r+1))];
+        sum-=a[o+cx(i-r)];
+        sum+=a[o+cx(i+r+1)];
       }
     }
-    for(let i=0;i<G;i++){
+    for(let i=0;i<GW;i++){
       let sum=0;
-      for(let j=-r;j<=r;j++) sum+=b[Math.max(0,Math.min(G-1,j))*G+i];
-      const w=2*r+1;
-      for(let j=0;j<G;j++){
-        a[j*G+i]=sum/w;
-        sum-=b[Math.max(0,Math.min(G-1,j-r))*G+i];
-        sum+=b[Math.max(0,Math.min(G-1,j+r+1))*G+i];
+      for(let j=-r;j<=r;j++) sum+=b[cy(j)*GW+i];
+      for(let j=0;j<GH;j++){
+        a[j*GW+i]=sum/w;
+        sum-=b[cy(j-r)*GW+i];
+        sum+=b[cy(j+r+1)*GW+i];
       }
     }
   }
   return a;
 }
 
-const ix=d=>d%G, jx=d=>(d/G)|0;
-const wx=i=>-SPAN+i*CELL, wz=j=>-SPAN+j*CELL;
+const ix=d=>d%GW, jx=d=>(d/GW)|0;
+const wx=i=>-SPANX+i*CELL, wz=j=>-SPANZ+j*CELL;
+const areaM2=()=>((GW-1)*CELL)*((GH-1)*CELL);
 
 /* ══ three ══ */
 const canvas=$('#c');
@@ -646,14 +677,15 @@ const cloud=new THREE.Points(geo,mat); scene.add(cloud);
 const sGeo=new THREE.BufferGeometry();
 const surfMat=new THREE.ShaderMaterial({
   side:THREE.DoubleSide,
-  uniforms:{uH:{value:null},uLrm:{value:null},uTexel:{value:1/160},uCell:{value:1},uRange:{value:1},
+  uniforms:{uH:{value:null},uLrm:{value:null},uTexel:{value:new THREE.Vector2(1/160,1/160)},uCell:{value:1},uRange:{value:1},
     uVex:{value:1},uSun:{value:new THREE.Vector3(0,1,0)},uShade:{value:0},
     uLut:{value:null},uBands:{value:0},uClip:{value:new THREE.Vector2(0,1)},uHasLrm:{value:0}},
   vertexShader:'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
   fragmentShader:[
     'precision highp float;',
     'uniform sampler2D uH,uLut,uLrm;',
-    'uniform float uTexel,uCell,uRange,uVex,uShade,uBands,uHasLrm;',
+    'uniform vec2 uTexel;',
+    'uniform float uCell,uRange,uVex,uShade,uBands,uHasLrm;',
     'uniform vec3 uSun; uniform vec2 uClip;',
     'varying vec2 vUv;',
     'float dec(vec4 t){ return (t.r*255.0*256.0 + t.g*255.0)/65535.0; }',
@@ -661,8 +693,8 @@ const surfMat=new THREE.ShaderMaterial({
     'void main(){',
     '  float h = H(vUv);',
     '  if(h < uClip.x || h > uClip.y) discard;',
-    '  float hL=H(vUv-vec2(uTexel,0.0)), hR=H(vUv+vec2(uTexel,0.0));',
-    '  float hD=H(vUv-vec2(0.0,uTexel)), hU=H(vUv+vec2(0.0,uTexel));',
+    '  float hL=H(vUv-vec2(uTexel.x,0.0)), hR=H(vUv+vec2(uTexel.x,0.0));',
+    '  float hD=H(vUv-vec2(0.0,uTexel.y)), hU=H(vUv+vec2(0.0,uTexel.y));',
     '  float k = uRange*uVex/(2.0*uCell);',
     '  vec3 n = normalize(vec3(-(hR-hL)*k, 1.0, -(hU-hD)*k));',
     '  float sh = 0.16 + 0.84*max(0.0, dot(n, normalize(uSun)));',
@@ -713,7 +745,10 @@ function makeRT(){
   if(rt)rt.dispose();
   const d=Math.min(devicePixelRatio||1,2);
   const w=Math.max(1,(innerWidth*d)|0), h=Math.max(1,(innerHeight*d)|0);
-  const type=rn.capabilities.isWebGL2?THREE.HalfFloatType:THREE.UnsignedByteType;
+  const canHalf=rn.capabilities.isWebGL2
+    ? !!rn.extensions.get('EXT_color_buffer_float')
+    : !!rn.extensions.get('EXT_color_buffer_half_float');
+  const type=canHalf?THREE.HalfFloatType:THREE.UnsignedByteType;
   rt=new THREE.WebGLRenderTarget(w,h,{minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter,
     format:THREE.RGBAFormat,type,depthBuffer:true,stencilBuffer:false});
   edl.uniforms.uTexel.value.set(1/w,1/h);
@@ -729,54 +764,57 @@ let yaw=.72,pitch=.30,dist=290,idle=0,auto=true,tPitch=null,tDist=null;
 
 /* ══ install a DEM ══ */
 function installDEM(dem){
-  // downsample if needed
-  let vals=dem.vals, g=dem.g, cell=dem.cell;
-  while(g>MAXG){
-    const ng=Math.ceil(g/2), nv=new Float32Array(ng*ng);
-    for(let j=0;j<ng;j++)for(let i=0;i<ng;i++){
+  // downsample if needed — rectangular rasters keep their true aspect
+  let vals=dem.vals, gw=dem.gw, gh=dem.gh, cell=dem.cell;
+  while(gw>MAXG||gh>MAXG||(!bigIndex&&gw*gh>65536)){
+    const nw=Math.max(2,Math.ceil(gw/2)), nh=Math.max(2,Math.ceil(gh/2));
+    const nv=new Float32Array(nw*nh);
+    for(let j=0;j<nh;j++)for(let i=0;i<nw;i++){
       let s=0,n=0;
       for(let dj=0;dj<2;dj++)for(let di=0;di<2;di++){
-        const jj=Math.min(g-1,j*2+dj), ii=Math.min(g-1,i*2+di);
-        s+=vals[jj*g+ii];n++;
+        const jj=Math.min(gh-1,j*2+dj), ii=Math.min(gw-1,i*2+di);
+        s+=vals[jj*gw+ii];n++;
       }
-      nv[j*ng+i]=s/n;
+      nv[j*nw+i]=s/n;
     }
-    vals=nv; cell*=g/ng; g=ng;
+    vals=nv; cell*=2; gw=nw; gh=nh;
   }
-  G=g; CELL=cell; SPAN=(G-1)*CELL/2;
-  Zm=new Float32Array(G*G); Hn=new Float32Array(G*G);
+  GW=gw; GH=gh; CELL=cell;
+  SPANX=(GW-1)*CELL/2; SPANZ=(GH-1)*CELL/2; SPAN=Math.max(SPANX,SPANZ);
+  const T=GW*GH;
+  Zm=new Float32Array(T); Hn=new Float32Array(T);
   let lo=Infinity,hi=-Infinity;
-  for(let d=0;d<G*G;d++){const v=vals[d];if(v<lo)lo=v;if(v>hi)hi=v;}
+  for(let d=0;d<T;d++){const v=vals[d];if(v<lo)lo=v;if(v>hi)hi=v;}
   zMin=lo; zMax=hi; zRange=Math.max(1e-3,hi-lo);
-  for(let d=0;d<G*G;d++){Zm[d]=vals[d]-lo; Hn[d]=Zm[d]/zRange;}
+  for(let d=0;d<T;d++){Zm[d]=vals[d]-lo; Hn[d]=Zm[d]/zRange;}
 
-  gx=new Float32Array(G*G);gz=new Float32Array(G*G);slope=new Float32Array(G*G);
-  for(let j=0;j<G;j++)for(let i=0;i<G;i++){
-    const iL=Math.max(0,i-1),iR=Math.min(G-1,i+1),jD=Math.max(0,j-1),jU=Math.min(G-1,j+1);
-    const dx=(Zm[j*G+iR]-Zm[j*G+iL])/((iR-iL)*CELL);
-    const dz=(Zm[jU*G+i]-Zm[jD*G+i])/((jU-jD)*CELL);
-    gx[j*G+i]=dx;gz[j*G+i]=dz;slope[j*G+i]=Math.atan(Math.hypot(dx,dz));
+  gx=new Float32Array(T);gz=new Float32Array(T);slope=new Float32Array(T);
+  for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
+    const iL=Math.max(0,i-1),iR=Math.min(GW-1,i+1),jD=Math.max(0,j-1),jU=Math.min(GH-1,j+1);
+    const dx=(Zm[j*GW+iR]-Zm[j*GW+iL])/((iR-iL)*CELL);
+    const dz=(Zm[jU*GW+i]-Zm[jD*GW+i])/((jU-jD)*CELL);
+    gx[j*GW+i]=dx;gz[j*GW+i]=dz;slope[j*GW+i]=Math.atan(Math.hypot(dx,dz));
   }
 
-  if(hTex)hTex.dispose(); hTex=packTex(Hn,0,1,G);
+  if(hTex)hTex.dispose(); hTex=packTex(Hn,0,1,GW,GH);
   if(lrmTex){lrmTex.dispose();lrmTex=null;} surfMat.uniforms.uHasLrm.value=0;
   surfMat.uniforms.uH.value=hTex;
-  surfMat.uniforms.uTexel.value=1/G;
+  surfMat.uniforms.uTexel.value.set(1/GW,1/GH);
   surfMat.uniforms.uCell.value=CELL;
   surfMat.uniforms.uRange.value=zRange;
 
   // surface geometry
-  const p=new Float32Array(G*G*3), uv=new Float32Array(G*G*2);
-  for(let j=0;j<G;j++)for(let i=0;i<G;i++){
-    const d=j*G+i;
+  const p=new Float32Array(T*3), uv=new Float32Array(T*2);
+  for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
+    const d=j*GW+i;
     p[d*3]=wx(i); p[d*3+1]=zMin+Hn[d]*zRange; p[d*3+2]=wz(j);
-    uv[d*2]=(i+0.5)/G; uv[d*2+1]=(j+0.5)/G;
+    uv[d*2]=(i+0.5)/GW; uv[d*2+1]=(j+0.5)/GH;
   }
-  const tri=(G-1)*(G-1)*6;
-  const idx = (G*G>65536) ? new Uint32Array(tri) : new Uint16Array(tri);
+  const tri=(GW-1)*(GH-1)*6;
+  const idx = (T>65536) ? new Uint32Array(tri) : new Uint16Array(tri);
   let n=0;
-  for(let j=0;j<G-1;j++)for(let i=0;i<G-1;i++){
-    const a=j*G+i,b=a+1,c2=a+G,d2=c2+1;
+  for(let j=0;j<GH-1;j++)for(let i=0;i<GW-1;i++){
+    const a=j*GW+i,b=a+1,c2=a+GW,d2=c2+1;
     idx[n++]=a;idx[n++]=c2;idx[n++]=b; idx[n++]=b;idx[n++]=c2;idx[n++]=d2;
   }
   sGeo.setAttribute('position',new THREE.BufferAttribute(p,3));
@@ -785,12 +823,13 @@ function installDEM(dem){
   sGeo.computeBoundingSphere();
 
   if(box){overlay.remove(box);box.geometry.dispose();}
-  box=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(SPAN*2,zRange+6,SPAN*2)),boxMat);
+  box=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(SPANX*2,zRange+6,SPANZ*2)),boxMat);
   box.position.y=zMin+zRange/2;
   overlay.add(box);
 
   mat.uniforms.uGap.value=Math.max(8,zRange*1.2);
   demName=dem.name; demNote=dem.note;
+  closeDetail();
   hits=[];selected=-1;$('#marks').innerHTML='';$('#hits').innerHTML='';
   $('#scanmeta').textContent='Not yet run. Scans the bare-earth model for possible anthropogenic terrain features.';
 
@@ -799,12 +838,12 @@ function installDEM(dem){
   applyVex(); updateStats(); paintLegend(); hud();
 }
 function updateStats(){
-  const acres=((SPAN*2)*(SPAN*2))/4046.86;
+  const acres=areaM2()/4046.86;
   $('#stats').innerHTML= (hasPoints? '<b>'+N.toLocaleString()+'</b> pts<br>' : '')+
-    '<b>'+G+' × '+G+'</b> @ '+CELL.toFixed(2)+' m<br>'+
+    '<b>'+GW+' × '+GH+'</b> @ '+CELL.toFixed(2)+' m<br>'+
     acres.toFixed(1)+' acres<br>'+demName;
   $('#srcmeta').innerHTML='<b>'+demName+'</b><br>'+demNote+'<br>'+
-    'Grid <b>'+G+' × '+G+'</b> · cell <b>'+CELL.toFixed(2)+' m</b><br>'+
+    'Grid <b>'+GW+' × '+GH+'</b> · cell <b>'+CELL.toFixed(2)+' m</b><br>'+
     'Relief <b>'+(zRange*M2FT).toFixed(0)+' ft</b>';
 }
 
@@ -821,16 +860,17 @@ function hillshadeAt(d,az,alt){
   return Math.max(0,(nx*sx+ny*sy+nz*sz)/L);
 }
 function components(mask,minCells,maxCells){
-  const seen=new Uint8Array(G*G),out=[],st=new Int32Array(G*G);
-  for(let d0=0;d0<G*G;d0++){
+  const T=GW*GH;
+  const seen=new Uint8Array(T),out=[],st=new Int32Array(T);
+  for(let d0=0;d0<T;d0++){
     if(!mask[d0]||seen[d0]) continue;
     let sp=0;st[sp++]=d0;seen[d0]=1;const cells=[];
     while(sp){
       const d=st[--sp];cells.push(d);
       const i=ix(d),j=jx(d);
       for(let dj=-1;dj<=1;dj++)for(let di=-1;di<=1;di++){
-        const ii=i+di,jj=j+dj;if(ii<0||ii>=G||jj<0||jj>=G)continue;
-        const e=jj*G+ii;if(mask[e]&&!seen[e]){seen[e]=1;st[sp++]=e;}
+        const ii=i+di,jj=j+dj;if(ii<0||ii>=GW||jj<0||jj>=GH)continue;
+        const e=jj*GW+ii;if(mask[e]&&!seen[e]){seen[e]=1;st[sp++]=e;}
       }
     }
     if(cells.length>=minCells&&cells.length<=maxCells) out.push(cells);
@@ -857,10 +897,10 @@ function analyse(cells,LRM,broad,sign,scaleName){
   const inSet=new Set(cells),rad=[];
   for(let a=0;a<8;a++){
     const th=a*Math.PI/4,dx=Math.cos(th),dz=Math.sin(th);let r=0;
-    for(let s=1;s<G;s++){
+    for(let s=1;s<Math.max(GW,GH);s++){
       const ii=Math.round(ci+dx*s),jj=Math.round(cj+dz*s);
-      if(ii<0||ii>=G||jj<0||jj>=G)break;
-      if(!inSet.has(jj*G+ii))break;
+      if(ii<0||ii>=GW||jj<0||jj>=GH)break;
+      if(!inSet.has(jj*GW+ii))break;
       r=s;
     }
     rad.push(r*CELL);
@@ -875,8 +915,8 @@ function analyse(cells,LRM,broad,sign,scaleName){
   for(const d of cells){
     const i=ix(d),j=jx(d);let border=false;
     for(let dj=-1;dj<=1&&!border;dj++)for(let di=-1;di<=1;di++){
-      const ii=i+di,jj=j+dj;if(ii<0||ii>=G||jj<0||jj>=G)continue;
-      if(!inSet.has(jj*G+ii)){border=true;break;}
+      const ii=i+di,jj=j+dj;if(ii<0||ii>=GW||jj<0||jj>=GH)continue;
+      if(!inSet.has(jj*GW+ii)){border=true;break;}
     }
     if(border){es+=slope[d];en++;}
   }
@@ -887,10 +927,10 @@ function analyse(cells,LRM,broad,sign,scaleName){
     for(const d of cells){const h=hillshadeAt(d,a,25);if(h<lo)lo=h;if(h>hi)hi=h;}
     if(hi-lo>0.075)dirs++;
   }
-  const RI=Math.round(ci),RJ=Math.round(cj),cd=RJ*G+RI;
-  const bIL=Math.max(0,RI-3),bIR=Math.min(G-1,RI+3),bJD=Math.max(0,RJ-3),bJU=Math.min(G-1,RJ+3);
-  const bgx=(broad[RJ*G+bIR]-broad[RJ*G+bIL])/((bIR-bIL)*CELL);
-  const bgz=(broad[bJU*G+RI]-broad[bJD*G+RI])/((bJU-bJD)*CELL);
+  const RI=Math.max(0,Math.min(GW-1,Math.round(ci))),RJ=Math.max(0,Math.min(GH-1,Math.round(cj))),cd=RJ*GW+RI;
+  const bIL=Math.max(0,RI-3),bIR=Math.min(GW-1,RI+3),bJD=Math.max(0,RJ-3),bJU=Math.min(GH-1,RJ+3);
+  const bgx=(broad[RJ*GW+bIR]-broad[RJ*GW+bIL])/((bIR-bIL)*CELL);
+  const bgz=(broad[bJU*GW+RI]-broad[bJD*GW+RI])/((bJU-bJD)*CELL);
   const broadSlope=Math.atan(Math.hypot(bgx,bgz));
   const gradDir=Math.atan2(bgz,bgx);
   let ang=Math.abs(orient-gradDir)%Math.PI; if(ang>Math.PI/2)ang=Math.PI-ang;
@@ -899,8 +939,8 @@ function analyse(cells,LRM,broad,sign,scaleName){
   for(let a=0;a<12;a++){
     const th=a*Math.PI/6;
     const ii=Math.round(ci+Math.cos(th)*(rMean*1.45/CELL)),jj=Math.round(cj+Math.sin(th)*(rMean*1.45/CELL));
-    if(ii<0||ii>=G||jj<0||jj>=G)continue;
-    ringN++; if(LRM[jj*G+ii]<-0.15)ring++;
+    if(ii<0||ii>=GW||jj<0||jj>=GH)continue;
+    ringN++; if(LRM[jj*GW+ii]<-0.15)ring++;
   }
   const ditch=ringN>=8&&ring/ringN>=0.5;
   const ringForm=peak>0.3&&sign*LRM[cd]<0.42*peak;
@@ -921,18 +961,24 @@ function classify(f){
   if(f.circ>0.42&&f.relief>0.3) return 'Possible Mound';
   return 'Uncertain Terrain Anomaly';
 }
+/* Weights are calibrated so a candidate must earn High (>=70), not inherit it.
+   The previous version handed every candidate a constant 56 (base 28 + a
+   hillshade term that scored 16/16 for essentially any relief + a clustering
+   bonus of 12), which put 100% of hits in the High band. Only a feature that is
+   circular, symmetric, well-defined, high-relief AND persistent across scales
+   now reaches High. */
 function score(f){
-  let s=28;const up=[],down=[];
-  const add=(v,l)=>{if(v>0.5)up.push(l);s+=v;};
-  add(f.circ*17,'high circularity');
-  add(f.sym*13,'radial symmetry');
-  add(Math.min(f.relief/1.5,1)*15,'strong local relief');
-  add(f.flat*8,'flattened summit');
-  add(f.sharp*8,'defined base break');
-  add((f.dirs/8)*16,'visible under '+f.dirs+' of 8 hillshade directions');
-  if(f.scales>1){s+=8;up.push('persists across '+f.scales+' analysis scales');}
-  if(f.ditch){s+=9;up.push('surrounding depression');}
-  if(f.cluster>=2){s+=Math.min(12,f.cluster*4);up.push('clustered with '+f.cluster+' similar features');}
+  let s=6;const up=[],down=[];
+  const add=(v,max,l)=>{if(v>=max*0.55)up.push(l);s+=v;};
+  add(f.circ*18,18,'high circularity');
+  add(f.sym*12,12,'radial symmetry');
+  add(Math.min(f.relief/1.2,1)*14,14,'strong local relief');
+  add(f.flat*7,7,'flattened summit');
+  add(f.sharp*7,7,'defined base break');
+  add(Math.pow(f.dirs/8,3)*8,8,'visible under '+f.dirs+' of 8 hillshade directions');
+  if(f.scales>1){s+=Math.min(14,(f.scales-1)*7);up.push('persists across '+f.scales+' analysis scales');}
+  if(f.ditch){s+=8;up.push('surrounding depression');}
+  if(f.cluster>=2){s+=Math.min(6,f.cluster*1.5);up.push('clustered with '+f.cluster+' similar features');}
   if(f.alignedDownslope){s-=24;down.push('long axis follows local downslope');}
   if(f.broadSlope>0.21){s-=14;down.push('sits on steep natural terrain');}
   if(f.relief<0.4){s-=10;down.push('weak elevation difference');}
@@ -951,17 +997,19 @@ function altFor(f){
 function runScan(){
   const found=[];
   const broad=blur(Zm,Math.max(3,36/CELL),3);
+  const T=GW*GH;
   SCALES.forEach(sc=>{
     const sm=blur(Zm,Math.max(2,sc.rM/CELL),3);
-    const LRM=new Float32Array(G*G);
-    let m=0;for(let d=0;d<G*G;d++){LRM[d]=Zm[d]-sm[d];m+=LRM[d];}
-    m/=G*G;
-    let v=0;for(let d=0;d<G*G;d++){const e=LRM[d]-m;v+=e*e;}
-    const t=Math.max(0.22,1.75*Math.sqrt(v/(G*G)));
+    const LRM=new Float32Array(T);
+    let m=0;for(let d=0;d<T;d++){LRM[d]=Zm[d]-sm[d];m+=LRM[d];}
+    m/=T;
+    let v=0;for(let d=0;d<T;d++){const e=LRM[d]-m;v+=e*e;}
+    const t=Math.max(0.22,1.75*Math.sqrt(v/T));
     const lo=Math.max(3,Math.round(sc.aLo/(CELL*CELL))), hi=Math.round(sc.aHi/(CELL*CELL));
+    if(hi<lo) return;                       // scale unresolvable at this cell size
     for(const sign of [1,-1]){
-      const mk=new Uint8Array(G*G);
-      for(let d=0;d<G*G;d++) mk[d]=(sign*LRM[d]>t)?1:0;
+      const mk=new Uint8Array(T);
+      for(let d=0;d<T;d++) mk[d]=(sign*LRM[d]>t)?1:0;
       for(const cells of components(mk,lo,hi)){
         const f=analyse(cells,LRM,broad,sign,sc.name);
         if(f.relief<0.25) continue;
@@ -978,7 +1026,10 @@ function runScan(){
     else{f.scales=1;merged.push(f);}
   }
   for(const f of merged)
-    f.cluster=merged.filter(g=>g!==f&&Math.hypot(g.x-f.x,g.z-f.z)<130&&g.length<f.length*2.2&&g.length>f.length/2.2).length;
+    f.cluster=merged.filter(g=>g!==f&&g.sign===f.sign
+      &&Math.hypot(g.x-f.x,g.z-f.z)<130
+      &&g.length<f.length*2.2&&g.length>f.length/2.2
+      &&g.relief<f.relief*2.5&&g.relief>f.relief/2.5).length;
   for(const f of merged){f.type=classify(f);f.score=score(f);f.alt=altFor(f);}
   merged.sort((a,b)=>b.score-a.score);
   return merged.filter(f=>f.score>=22).slice(0,14);
@@ -1001,22 +1052,29 @@ function parseASC(text){
   const lines=text.split(/\r?\n/);
   const hdr={};let row=0;
   while(row<lines.length){
-    const m=lines[row].trim().match(/^([A-Za-z_]+)\s+(-?[\d.eE+]+)/);
+    const m=lines[row].trim().match(/^([A-Za-z_]+)\s+(-?[\d.eE+-]+)/);
     if(!m) break;
     hdr[m[1].toLowerCase()]=parseFloat(m[2]); row++;
   }
   const nc=hdr.ncols|0, nr=hdr.nrows|0;
   if(!nc||!nr) throw new Error('Not an ASCII grid');
-  const cell=hdr.cellsize||1, nod=hdr.nodata_value!==undefined?hdr.nodata_value:-9999;
-  const g=Math.max(nc,nr), vals=new Float32Array(g*g).fill(Infinity);
+  let cell=hdr.cellsize||1;
+  // A cellsize this small is degrees, not metres (geographic grid).
+  if(cell>0&&cell<0.01){
+    const lat=hdr.yllcorner!==undefined?hdr.yllcorner+cell*nr/2:35;
+    cell=cell*(111320*Math.cos(lat*Math.PI/180)+110540)/2;
+  }
+  if(!isFinite(cell)||cell<=0) cell=1;
+  const nod=hdr.nodata_value!==undefined?hdr.nodata_value:-9999;
+  const vals=new Float32Array(nc*nr).fill(Infinity);
   const nums=lines.slice(row).join(' ').trim().split(/\s+/);
   let p=0;
   for(let j=0;j<nr;j++)for(let i=0;i<nc;i++){
     const v=parseFloat(nums[p++]);
-    vals[j*g+i]= (!isFinite(v)||v===nod||v<-1e5||v>1e6) ? Infinity : v;
+    vals[j*nc+i]= (!isFinite(v)||v===nod||v<-1e5||v>1e6) ? Infinity : v;
   }
-  fillHoles(vals,g);
-  return {vals,g,cell,name:'ASCII grid',note:nc+' × '+nr+' cells'};
+  fillHoles(vals,nc,nr);
+  return {vals,gw:nc,gh:nr,cell,name:'ASCII grid',note:nc+' × '+nr+' cells'};
 }
 async function parseTIFF(file){
   if(!window.GeoTIFF){
@@ -1051,13 +1109,13 @@ async function parseTIFF(file){
     }
   }catch(e){}
   if(!isFinite(cell)||cell<=0) cell=1;
-  const g=Math.max(w,h), vals=new Float32Array(g*g).fill(Infinity);
+  const vals=new Float32Array(w*h).fill(Infinity);
   for(let j=0;j<h;j++)for(let i=0;i<w;i++){
     const v=band[j*w+i];
-    vals[j*g+i]=(!isFinite(v)||(nod!==null&&v===nod)||v<-1e5||v>1e6)?Infinity:v;
+    vals[j*w+i]=(!isFinite(v)||(nod!==null&&v===nod)||v<-1e5||v>1e6)?Infinity:v;
   }
-  fillHoles(vals,g);
-  return {vals,g,cell,name:file.name.replace(/\.[^.]+$/,''),note:w+' × '+h+' raster'};
+  fillHoles(vals,w,h);
+  return {vals,gw:w,gh:h,cell,name:file.name.replace(/\.[^.]+$/,''),note:w+' × '+h+' raster'};
 }
 
 /* ══ display plumbing ══ */
@@ -1129,8 +1187,11 @@ function paintLegend(){
   if(mode!=='points'&&attr!=='intens'){
     $('#lo').textContent=Math.round(zMin*M2FT)+' ft';$('#hi').textContent=Math.round(zMax*M2FT)+' ft';return;
   }
-  $('#lo').textContent=attr==='intens'?'Low':Math.round(zMin*M2FT)+' ft';
-  $('#hi').textContent=attr==='intens'?'High':Math.round(zMax*M2FT)+' ft';
+  // In points mode the ramp is driven by pElev, normalised over the full point
+  // cloud (vegetation and structures included), not the bare-earth DEM range.
+  const eLo=(mode==='points'&&hasPoints)?pMin:zMin, eHi=(mode==='points'&&hasPoints)?pMax:zMax;
+  $('#lo').textContent=attr==='intens'?'Low':Math.round(eLo*M2FT)+' ft';
+  $('#hi').textContent=attr==='intens'?'High':Math.round(eHi*M2FT)+' ft';
 }
 function paintSwatches(){CSETS[PAL[pal].cls][theme].forEach((h,i)=>{$('#sw'+i).style.background=h;});}
 function hud(){
@@ -1138,7 +1199,7 @@ function hud(){
   const shd=['Hillshade','Tinted relief','Slope','Local relief'][surfMat.uniforms.uShade.value];
   $('#cap').textContent=mode==='points'
     ?(sep<.02?(vex>1.05?'Exaggerated':'Composite'):(sepBy==='class'?'Class split':'Elevation split')):shd;
-  $('#spine').textContent=mode==='points'?'Point cloud':'Bare earth DEM · '+G+' × '+G;
+  $('#spine').textContent=mode==='points'?'Point cloud':'Bare earth DEM · '+GW+' × '+GH;
 }
 function setTheme(t){
   theme=t;document.documentElement.dataset.theme=t;
@@ -1151,7 +1212,7 @@ function setTheme(t){
 function applyVex(){
   mat.uniforms.uVex.value=vex;surfMat.uniforms.uVex.value=vex;
   const p=sGeo.attributes.position.array;
-  for(let d=0;d<G*G;d++) p[d*3+1]=zMin+Hn[d]*zRange*vex;
+  for(let d=0;d<GW*GH;d++) p[d*3+1]=zMin+Hn[d]*zRange*vex;
   sGeo.attributes.position.needsUpdate=true;sGeo.computeBoundingSphere();
   if(box){box.scale.y=vex;box.position.y=zMin+(zRange/2)*vex;}
   buildFrames();hud();
@@ -1163,9 +1224,9 @@ function updateSun(){
   $('#altval').textContent=Math.round(altDeg)+'\u00b0';
 }
 function surfaceY(x,z){
-  const i=Math.max(0,Math.min(G-1,Math.round((x+SPAN)/CELL)));
-  const j=Math.max(0,Math.min(G-1,Math.round((z+SPAN)/CELL)));
-  return zMin+Hn[j*G+i]*zRange*vex;
+  const i=Math.max(0,Math.min(GW-1,Math.round((x+SPANX)/CELL)));
+  const j=Math.max(0,Math.min(GH-1,Math.round((z+SPANZ)/CELL)));
+  return zMin+Hn[j*GW+i]*zRange*vex;
 }
 function lift(){return (mode==='points'&&hasPoints)?(sepBy==='class'?3:layers)*sep*mat.uniforms.uGap.value*.5:0;}
 function place(){
@@ -1264,7 +1325,7 @@ function buildList(){
   const hi=hits.filter(f=>f.score>=70).length,
         mid=hits.filter(f=>f.score>=45&&f.score<70).length,
         lo=hits.filter(f=>f.score<45).length;
-  const acres=((SPAN*2)*(SPAN*2))/4046.86, ha=((SPAN*2)*(SPAN*2))/10000;
+  const acres=areaM2()/4046.86, ha=areaM2()/10000;
   $('#scanmeta').innerHTML='Terrain Scan Complete<br>Area scanned <b>'+acres.toFixed(1)+' acres</b> ('+ha.toFixed(1)+' ha)<br>'+
     'Anomalies <b>'+hits.length+'</b> — high <b>'+hi+'</b>, moderate <b>'+mid+'</b>, low <b>'+lo+'</b>';
   const b2=$('#hits');b2.innerHTML='';
@@ -1275,7 +1336,7 @@ function buildList(){
   });
 }
 function select(n){
-  if(n<0||n>=hits.length)return;
+  if(!Number.isInteger(n)||n<0||n>=hits.length)return;
   selected=n;const f=hits[n];
   hits.forEach((g,i)=>{if(g.el)g.el.setAttribute('aria-pressed',i===n?'true':'false');});
   $('#dtype').textContent=f.type;
@@ -1301,8 +1362,8 @@ function select(n){
 function closeDetail(){document.body.classList.remove('detail-open');
   hits.forEach(g=>{if(g.el)g.el.setAttribute('aria-pressed','false');});selected=-1;}
 $('#dclose').onclick=closeDetail;
-$('#dprev').onclick=()=>select((selected-1+hits.length)%hits.length);
-$('#dnext').onclick=()=>select((selected+1)%hits.length);
+$('#dprev').onclick=()=>{if(hits.length)select((selected-1+hits.length)%hits.length);};
+$('#dnext').onclick=()=>{if(hits.length)select((selected+1)%hits.length);};
 $('#scanbtn').onclick=doScan;
 
 const proj=new THREE.Vector3();
@@ -1367,11 +1428,11 @@ segBind('#mode',b=>{mode=b.dataset.m;paintLegend();hud();});
 segBind('#shade',b=>{
   const v=+b.dataset.s;
   if(v===3&&!lrmTex){
-    const sm=blur(Zm,Math.max(2,15/CELL),3),L=new Float32Array(G*G);
+    const T=GW*GH,sm=blur(Zm,Math.max(2,15/CELL),3),L=new Float32Array(T);
     let lo=1e9,hi=-1e9;
-    for(let d=0;d<G*G;d++){L[d]=Zm[d]-sm[d];if(L[d]<lo)lo=L[d];if(L[d]>hi)hi=L[d];}
+    for(let d=0;d<T;d++){L[d]=Zm[d]-sm[d];if(L[d]<lo)lo=L[d];if(L[d]>hi)hi=L[d];}
     const m=Math.max(Math.abs(lo),Math.abs(hi))||1;
-    lrmTex=packTex(L,-m,m,G);surfMat.uniforms.uLrm.value=lrmTex;surfMat.uniforms.uHasLrm.value=1;
+    lrmTex=packTex(L,-m,m,GW,GH);surfMat.uniforms.uLrm.value=lrmTex;surfMat.uniforms.uHasLrm.value=1;
   }
   surfMat.uniforms.uShade.value=v;
   if(mode==='points'){mode='surface';segSet('#mode','surface','m');}
@@ -1470,7 +1531,9 @@ function tick(now){
   positionMarkers();
 
   if((frame++&3)===0){
-    const yd=-yaw*180/Math.PI;
+    // Bearing of north measured clockwise from screen-up. Screen-right is the
+    // ground direction (sin yaw, -cos yaw), so north sits at 90deg - yaw.
+    const yd=90-yaw*180/Math.PI;
     needle.style.transform='rotate('+yd+'deg)';
     sunrot.style.transform='rotate('+(yd+azDeg)+'deg)';
     const wpp=2*Math.tan(46*Math.PI/360)*dist/innerHeight,ft=wpp*64*M2FT;
