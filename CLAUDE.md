@@ -11,11 +11,14 @@ Personal project under KLINEKRAFT. Static site, deployed on Vercel.
 ## What it does
 
 1. Renders a bare-earth DEM as a shaded 3D surface, or a classified point
-   cloud, or both.
+   cloud, or both. Reads GeoTIFF, ESRI ASCII grid, and LAS/LAZ point clouds.
 2. Gives the operator the controls that actually reveal subtle earthworks:
    movable sun, vertical exaggeration, contour banding, local relief model,
    slope shading, elevation clipping.
-3. Runs **Terrain Scan** — a real geomorphometry pipeline that detects,
+3. Renders **sky-view factor**, **openness**, **multi-directional hillshade**
+   and a **VAT composite** — illumination-independent relief products that show
+   shallow earthworks a plain hillshade buries.
+4. Runs **Terrain Scan** — a real geomorphometry pipeline that detects,
    measures, scores and ranks possible anthropogenic terrain features, then
    marks them on the map with the evidence that flagged them.
 
@@ -31,14 +34,15 @@ Read top to bottom; it is organised in these blocks.
 | Block | What lives there |
 |---|---|
 | Palettes | `PAL` ramps + `CSETS` class colors, both keyed by `dark`/`light`. 256-entry LUTs precomputed into `LUTS`. |
-| Demo point cloud | Synthetic 100k-point tile with 5 planted mounds and 1 linear earthwork. Only dataset that has points. |
+| Point cloud | Synthetic 100k demo tile, or returns decoded from a LAS/LAZ file. `NP` is the live count; `pos`/`cls`/`pElev`/`intn` are reassigned by `installPoints`, so never loop to `N`. |
 | Mutable terrain grid | `GW, GH, CELL, SPANX, SPANZ, SPAN, Zm, Hn, gx, gz, slope, zMin, zMax, zRange`. All rebuilt by `installDEM()`. |
 | three.js setup | `scene` (points + surface), `overlay` (wireframe box + separation frames), `quadScene` (EDL composite). |
 | `installDEM(dem)` | The single entry point for new terrain. Downsamples, normalises, computes gradients, packs the height texture, rebuilds surface geometry and bounding box, resets scan results, reframes the camera. |
+| Horizon products | `HDIRS`, `HRADIUS`, `horizonScan`, `needHorizon` → `SVF`, `OPN`, `POS`. Built on demand, invalidated by `installDEM`. |
 | Scan | `SCALES`, `blur`, `components`, `analyse`, `classify`, `score`, `altFor`, `runScan`. |
-| DEM readers | `parseASC` (zero-dependency), `parseTIFF` (lazy geotiff.js). |
+| DEM readers | `parseASC` (zero-dependency), `parseTIFF` (lazy geotiff.js), `parseLAS` (lazy laz-perf for `.laz`). |
 | Display plumbing | `recolor`, `paintRamp`, `paintLegend`, `applyVex`, `updateSun`, `setTheme`. |
-| UI | Glass sheet with drag-resize + snap, candidate detail sheet, marker projection. |
+| UI | Glass sheet with drag-resize + snap, candidate detail sheet, marker projection. Above 900px the same sheet becomes a collapsible left rail — one open/close state, only the axis changes. `--rail`, `--plateL` and `--sheet` keep the plate readouts clear of it. |
 | Loop | `tick()` — two render paths depending on mode. |
 
 ### Data conventions
@@ -82,17 +86,58 @@ vertex normals.
 - **three.js r128** is pinned. `THREE.OrbitControls` is not bundled — the orbit
   camera is hand-rolled from pointer events. `CapsuleGeometry` does not exist.
 - **Height texture is packed into RGBA8** (16-bit across R and G) and sampled
-  with `NearestFilter`. Linear filtering corrupts packed channels. Do not change
-  the filter.
+  with `NearestFilter`. Linear filtering corrupts packed channels — it would
+  blend the high and low bytes independently. Do not change the filter. The
+  fragment shader's `H()` instead decodes four texels and mixes them itself,
+  with smoothstep weights so the reconstruction is C1 and the normal (a central
+  difference of it) stays continuous across cell boundaries. Sampling the raw
+  texture directly makes every cell shade as a flat block.
+- **Projected GeoTIFFs are often in feet.** USGS OPR tiles for Oklahoma are
+  State Plane ftUS — `NAD83(2011) / Oklahoma South (ftUS) + NAVD88 height
+  (ftUS)` — and carry no `ProjLinearUnitsGeoKey`, because EPSG 6555 implies the
+  unit. `tiffUnits()` falls back to the CRS citation strings. Reading those as
+  metres inflates every distance and elevation by 3.28x, which also silently
+  moves the scan's metre-based thresholds. Horizontal and vertical units are
+  resolved separately, and the detected unit is shown in the source panel.
 - **Uint16 index limit.** The surface mesh needs 32-bit indices once
-  `GW*GH > 65536`. `MAXG` caps either dimension at 384 when
+  `GW*GH > 65536`. `MAXG` caps either dimension at 512 when
   `OES_element_index_uint`/WebGL2 is available, else 255; `installDEM` also
   halves until `GW*GH` fits when 32-bit indices are unavailable.
-- **rockyweb.usgs.gov sends no CORS headers.** Raw `.laz` tiles cannot be fetched
-  from the browser. Either convert with PDAL and self-host, or use a
-  CORS-enabled source.
-- **The scan blocks the main thread.** Fine at 384², will stutter beyond that.
-  Move it to a Worker before increasing grid size.
+- **rockyweb.usgs.gov sends no CORS headers.** Raw `.laz` tiles cannot be
+  *fetched* from the browser — but they open fine from the file picker, which is
+  the normal route. Downloading first is the workaround; PDAL is not needed.
+- **LAS/LAZ builds the DEM from class 2 returns only.** Vegetation and buildings
+  are kept for display and never reach the terrain model; letting them in is
+  what makes a scan report tree canopy as earthworks. A file with no class 2 is
+  rejected outright rather than silently gridded from first returns.
+- **The whole LAZ file goes into the WASM heap.** `LASZip.open` takes a pointer
+  to the complete file, so peak memory is roughly twice the file size. A 10M
+  point / 87 MB tile loads in ~18 s at ~212 MB of JS heap. Emscripten replaces
+  `HEAPU8` when the heap grows, which detaches any `DataView` held across
+  `getPoint` — compare `HEAPU8.buffer` each iteration and rebuild.
+- **Display points are capped at `LASMAXPTS`** (1.2M) by striding. The DEM still
+  uses every ground return; only the drawn cloud is thinned.
+- **The scan blocks the main thread.** On a real 500² tile the horizon scan is
+  ~590 ms and `runScan` ~4 s, both behind the progress overlay. The feature scan
+  is the bottleneck, not the horizon products. Moving both to a Worker is the
+  remaining Phase 4 item.
+- **Horizon rays step at 1.35x growth, not every cell.** Near cells carry the
+  angular detail; far ones barely move the horizon. Measured against a
+  brute-force sweep on real data: 1.55x faster, SVF RMS error 0.0008 and
+  openness RMS 0.07° against a ±20° range.
+- **Sky-view and openness need a percentile stretch, not min/max.** One incised
+  channel pins the low end and squeezes every subtle feature into the top few
+  percent of the ramp. `pctRange` does 2–98%; do not replace it with min/max.
+- **Sky-view and openness are rendered unlit on purpose.** Modulating them by a
+  hillshade would put back exactly the directional bias they exist to remove.
+- **Openness is deliberately not clamped at a flat horizon.** On a convex summit
+  every ray looks downward, so the horizon angle goes negative and positive
+  openness exceeds 90°. Clamping it — which is correct for sky-view, since the
+  sky cannot be more than fully open — collapses exactly the convex features the
+  measure exists to separate. `SVF` clamps, `POS` and `OPN` do not.
+- **`uShade` values are append-only.** 0 hillshade, 1 tinted, 2 slope, 3 local
+  relief, 4 sky-view, 5 openness, 6 multi-hillshade, 7 VAT. Presets and the
+  reset button reference them by number; renumbering breaks those silently.
 - **Marker positions are DOM elements** projected each frame. Cheap at ~14, will
   not scale to hundreds.
 - **`segBind` / `segSet`** drive every segmented control. Buttons carry the value
@@ -112,11 +157,19 @@ vertex normals.
 Never label anything "Confirmed". Score caps at 96. Bands: ≥70 High, ≥45
 Moderate, else Low.
 
-**Adds** (base 6, weights in points): circularity 18, radial symmetry 12, local
-relief 14 (saturating at 1.2 m), summit flatness 7, edge sharpness 7, hillshade
-persistence across 8 azimuths 8 (cubic in `dirs/8`), multi-scale persistence 7
-per extra scale to a maximum of 14, surrounding depression 8, clustering with
-similar neighbours 1.5 each to a maximum of 6.
+**Adds** (base 6, weights in points): circularity 16, radial symmetry 11, local
+relief 13 (saturating at 1.2 m), summit flatness 6, edge sharpness 6, hillshade
+persistence across 8 azimuths 4 (cubic in `dirs/8`), **openness contrast against
+the surrounding ring 10** (saturating at 5°), **sky-view contrast 7** (saturating
+at 0.06), multi-scale persistence 6 per extra scale to a maximum of 12,
+surrounding depression 7, clustering with similar neighbours 1.5 each to a
+maximum of 5.
+
+`dirs` comes back 8/8 for almost any relief, so hillshade persistence is worth
+little on its own. The illumination-independent pair carries that weight
+instead — that is what "detectable across multiple representations" has to mean
+in practice. Both contrasts are multiplied by `sign`, so a positive value means
+"shaped the way this candidate claims to be" for mounds and ditches alike.
 
 Keep the constant floor small. An earlier build opened at base 28 and added a
 near-constant 16 for hillshade persistence plus 12 for clustering — 56 points
@@ -126,7 +179,8 @@ bands meaningless. Clustering only counts neighbours of the same sign and within
 
 **Subtracts:** long axis following local downslope (−24), steep natural terrain
 (−14), straight and asymmetric i.e. road/levee/field boundary (−14), visible
-from ≤2 illumination directions (−12), weak relief (−10).
+from ≤2 illumination directions (−12), openness contradicting the claimed form
+(−12), weak relief (−10).
 
 Every candidate must carry an **Alternative Explanation**. Every candidate must
 carry its counter-indications. This is a screening tool, not an identifier.
@@ -152,3 +206,5 @@ carry its counter-indications. This is a screening tool, not an identifier.
 - Light and dark are both first-class; every color must be defined for both.
 - KLINEKRAFT wordmark in the footer.
 - iPhone first. 44px minimum touch targets, safe-area insets respected.
+- Desktop is a second layout, not a second design: the bottom sheet becomes a
+  left rail at 900px. Do not fork the markup for it.

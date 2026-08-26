@@ -72,40 +72,58 @@ no upload.
 
 ---
 
-## Phase 3 — Real point clouds via COPC (effort: one to two days)
+## Phase 3 — Real point clouds (local files done, streaming still open)
 
-The point cloud path currently only has synthetic demo data.
-
-- Add `laz-perf` (WASM decode) and `copc.js` (octree over HTTP range requests).
-- Load a `.copc.laz` from a URL or a local file.
-- Stream by octree node, respecting the current camera — do not load the whole
-  tile.
-- Wire real LAS classification codes: 2 ground, 5 high vegetation, 6 building.
-  The existing three-class chip UI maps directly.
-- Grid ground returns into the DEM using the code already in `demoDEM()`.
-
-**Source:** Microsoft Planetary Computer serves USGS 3DEP as COPC with CORS.
-That is the target. USGS rockyweb is not fetchable from a browser.
+- ~~Add `laz-perf` (WASM decode)~~ — done, lazy-loaded like geotiff.js.
+- ~~Load a `.las` / `.laz` from a local file~~ — done, via the file picker. No
+  CORS problem, because nothing is fetched.
+- ~~Wire real LAS classification codes: 2 ground, 5 high vegetation, 6
+  building~~ — done; the three-class chip UI maps directly.
+- ~~Grid ground returns into the DEM~~ — done, lowest class 2 return per cell.
+- **Still open: streaming.** The whole file goes into the WASM heap, so peak
+  memory is about twice the file size and a 10M point tile takes ~18 s. For
+  tiles beyond ~30M points this needs `copc.js` and octree nodes over HTTP range
+  requests, loading only what the camera needs. Microsoft Planetary Computer
+  serves USGS 3DEP as COPC with CORS and is the target for that.
+- **Still open: level of detail.** Display is capped at 1.2M points by striding.
+  `c42f/displaz` has the right idea — fit observed frame time against vertex
+  count and derive a quality factor, rather than a fixed cap.
 
 ---
 
-## Phase 4 — Better detection (effort: one to two days)
+## Phase 4 — Better detection (mostly done)
 
-The original spec listed visualizations not yet implemented. These are the ones
-archaeologists actually rely on:
+- ~~**Sky-view factor**~~ — done. 16 azimuths, 28 m search radius, rendered with
+  a 2–98% percentile stretch.
+- ~~**Positive / negative openness**~~ — done, rendered as the difference
+  (`PO − NO`), symmetric about zero so mid-ramp is flat ground.
+- ~~Feed these into the confidence score as independent indicators~~ — done, as
+  contrast against a surrounding ring, worth 10 and 7 points, with a −12
+  counter-indication when openness contradicts the claimed form.
+- ~~**Multi-hillshade blend**~~ — done, as the Mark 1992 / Tait 2010 weighting
+  GDAL uses for `-multidirectional`: four azimuths combined with a sin² weight
+  against the slope aspect, so no single sun angle stripes the image.
+- ~~**VAT composite**~~ — done. Sky-view base, positive openness overlaid,
+  darkened by slope; the Relief Visualization Toolbox archaeological default,
+  and greyscale, so it suits the house style. Gamma 1.35 is a tunable.
 
-- **Sky-view factor** — the single best product for shallow earthworks. Sample
-  horizon angle in 16 directions per cell.
-- **Positive / negative openness** — closely related, excellent for ditches and
-  banks.
-- **Multi-hillshade blend** — render 16 azimuths and combine, either PCA or
-  simple max. Removes the directional bias entirely.
-- Feed all of these into the confidence score as additional independent
-  indicators, per the "should remain detectable across multiple representations"
-  rule.
+Still worth taking from `nico579/lidar2map`, which covers the same ground in
+Python:
 
-Also move `runScan` into a **Web Worker** with progress messages. The staged
-progress UI already exists; it just needs real events instead of timed stages.
+- **MSTP** (multi-scale topographic position) — `DEV(σ) = (z − mean_σ)/std_σ`
+  over three scale bands into R/G/B, so colour encodes the dominant scale of a
+  structure. Genuinely useful, but inherently a colour product, which the
+  black-and-white house style rules out unless that rule bends for data.
+- **RRIM** (red relief image map) — slope × openness difference. Same problem:
+  the technique is named for its use of red.
+- A **line-sweep horizon kernel** instead of per-cell ray marching. `runScan`
+  is the bottleneck, not `horizonScan`, so this is not urgent.
+
+Still open: move `horizonScan` and `runScan` into a **Web Worker** with progress
+messages. On a real 500² tile they cost ~590 ms and ~4 s respectively, both
+blocking behind the progress overlay, and the staged progress UI is still timed
+rather than event-driven. `runScan` is the bottleneck — profile `components`,
+`analyse` and the 8-azimuth `dirs` loop before optimising anything else.
 
 ---
 
