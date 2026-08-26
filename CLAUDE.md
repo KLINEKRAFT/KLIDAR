@@ -15,8 +15,9 @@ Personal project under KLINEKRAFT. Static site, deployed on Vercel.
 2. Gives the operator the controls that actually reveal subtle earthworks:
    movable sun, vertical exaggeration, contour banding, local relief model,
    slope shading, elevation clipping.
-3. Renders **sky-view factor** and **openness** — illumination-independent
-   relief products that show shallow earthworks a hillshade buries.
+3. Renders **sky-view factor**, **openness**, **multi-directional hillshade**
+   and a **VAT composite** — illumination-independent relief products that show
+   shallow earthworks a plain hillshade buries.
 4. Runs **Terrain Scan** — a real geomorphometry pipeline that detects,
    measures, scores and ranks possible anthropogenic terrain features, then
    marks them on the map with the evidence that flagged them.
@@ -37,7 +38,7 @@ Read top to bottom; it is organised in these blocks.
 | Mutable terrain grid | `GW, GH, CELL, SPANX, SPANZ, SPAN, Zm, Hn, gx, gz, slope, zMin, zMax, zRange`. All rebuilt by `installDEM()`. |
 | three.js setup | `scene` (points + surface), `overlay` (wireframe box + separation frames), `quadScene` (EDL composite). |
 | `installDEM(dem)` | The single entry point for new terrain. Downsamples, normalises, computes gradients, packs the height texture, rebuilds surface geometry and bounding box, resets scan results, reframes the camera. |
-| Horizon products | `HDIRS`, `HRADIUS`, `horizonScan`, `needHorizon` → `SVF`, `OPN`. Built on demand, invalidated by `installDEM`. |
+| Horizon products | `HDIRS`, `HRADIUS`, `horizonScan`, `needHorizon` → `SVF`, `OPN`, `POS`. Built on demand, invalidated by `installDEM`. |
 | Scan | `SCALES`, `blur`, `components`, `analyse`, `classify`, `score`, `altFor`, `runScan`. |
 | DEM readers | `parseASC` (zero-dependency), `parseTIFF` (lazy geotiff.js). |
 | Display plumbing | `recolor`, `paintRamp`, `paintLegend`, `applyVex`, `updateSun`, `setTheme`. |
@@ -118,6 +119,14 @@ vertex normals.
   percent of the ramp. `pctRange` does 2–98%; do not replace it with min/max.
 - **Sky-view and openness are rendered unlit on purpose.** Modulating them by a
   hillshade would put back exactly the directional bias they exist to remove.
+- **Openness is deliberately not clamped at a flat horizon.** On a convex summit
+  every ray looks downward, so the horizon angle goes negative and positive
+  openness exceeds 90°. Clamping it — which is correct for sky-view, since the
+  sky cannot be more than fully open — collapses exactly the convex features the
+  measure exists to separate. `SVF` clamps, `POS` and `OPN` do not.
+- **`uShade` values are append-only.** 0 hillshade, 1 tinted, 2 slope, 3 local
+  relief, 4 sky-view, 5 openness, 6 multi-hillshade, 7 VAT. Presets and the
+  reset button reference them by number; renumbering breaks those silently.
 - **Marker positions are DOM elements** projected each frame. Cheap at ~14, will
   not scale to hundreds.
 - **`segBind` / `segSet`** drive every segmented control. Buttons carry the value

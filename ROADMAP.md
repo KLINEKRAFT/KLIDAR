@@ -98,9 +98,24 @@ That is the target. USGS rockyweb is not fetchable from a browser.
 - ~~Feed these into the confidence score as independent indicators~~ — done, as
   contrast against a surrounding ring, worth 10 and 7 points, with a −12
   counter-indication when openness contradicts the claimed form.
-- **Multi-hillshade blend** — still open. Render 16 azimuths and combine, either
-  PCA or simple max. Less urgent now that two illumination-independent products
-  exist, but it would let the hillshade term carry real weight again.
+- ~~**Multi-hillshade blend**~~ — done, as the Mark 1992 / Tait 2010 weighting
+  GDAL uses for `-multidirectional`: four azimuths combined with a sin² weight
+  against the slope aspect, so no single sun angle stripes the image.
+- ~~**VAT composite**~~ — done. Sky-view base, positive openness overlaid,
+  darkened by slope; the Relief Visualization Toolbox archaeological default,
+  and greyscale, so it suits the house style. Gamma 1.35 is a tunable.
+
+Still worth taking from `nico579/lidar2map`, which covers the same ground in
+Python:
+
+- **MSTP** (multi-scale topographic position) — `DEV(σ) = (z − mean_σ)/std_σ`
+  over three scale bands into R/G/B, so colour encodes the dominant scale of a
+  structure. Genuinely useful, but inherently a colour product, which the
+  black-and-white house style rules out unless that rule bends for data.
+- **RRIM** (red relief image map) — slope × openness difference. Same problem:
+  the technique is named for its use of red.
+- A **line-sweep horizon kernel** instead of per-cell ray marching. `runScan`
+  is the bottleneck, not `horizonScan`, so this is not urgent.
 
 Still open: move `horizonScan` and `runScan` into a **Web Worker** with progress
 messages. On a real 500² tile they cost ~590 ms and ~4 s respectively, both

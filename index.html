@@ -176,8 +176,9 @@
   .seg button[disabled]{opacity:.3;cursor:default;}
   .seg button:focus-visible{outline:1px solid var(--fg);outline-offset:-4px;}
   .seg.wrap{grid-auto-flow:row;grid-template-columns:repeat(5,1fr);grid-auto-columns:auto;}
-  .seg.wrap.three{grid-template-columns:repeat(3,1fr);}
-  .seg.wrap.three button:nth-child(-n+3){border-bottom:1px solid var(--line);}
+  .seg.wrap.four{grid-template-columns:repeat(4,1fr);}
+  .seg.wrap.four button{font-size:8px;letter-spacing:.02em;padding:0 2px;}
+  .seg.wrap.four button:nth-child(-n+4){border-bottom:1px solid var(--line);}
   .seg.wrap button{border-right:1px solid var(--line);font-size:9px;letter-spacing:.06em;}
   .ramp{display:flex;height:24px;width:100%;border:0;padding:0;background:none;cursor:pointer;}
   .ramp i{flex:1;display:block;transition:background .2s linear;}
@@ -363,13 +364,15 @@
 
     <div class="row">
       <div class="lab"><span>Surface shading</span></div>
-      <div class="seg wrap three" id="shade">
+      <div class="seg wrap four" id="shade">
         <button data-s="0" aria-pressed="true">Hillshade</button>
+        <button data-s="6" aria-pressed="false">Multi-dir</button>
         <button data-s="1" aria-pressed="false">Tinted</button>
         <button data-s="2" aria-pressed="false">Slope</button>
         <button data-s="3" aria-pressed="false">Relief</button>
         <button data-s="4" aria-pressed="false">Sky-view</button>
         <button data-s="5" aria-pressed="false">Openness</button>
+        <button data-s="7" aria-pressed="false">VAT</button>
       </div>
       <div class="lab" style="margin:12px 0 0"><span>Sun azimuth</span><b id="azval">315°</b></div>
       <input type="range" id="az" min="0" max="359" value="315" aria-label="Sun azimuth">
@@ -564,7 +567,8 @@ for(let i=0;i<N;i++)pElev[i]=(pos[i*3+1]-pMin)/pRange;
 let GW=0, GH=0, CELL=1, SPAN=1, SPANX=1, SPANZ=1;
 let Zm=null, Hn=null, gx=null, gz=null, slope=null;
 let zMin=0, zMax=1, zRange=1, hTex=null, lrmTex=null, hasPoints=true;
-let SVF=null, OPN=null, svfTex=null, opnTex=null;   // horizon products, built on demand
+let SVF=null, OPN=null, POS=null;                   // horizon products, built on demand
+let svfTex=null, opnTex=null, posTex=null;
 let demName='Demo tile', demNote='synthetic';
 
 function demoDEM(){
@@ -698,7 +702,7 @@ function blur(src,r,passes){
 const HDIRS=16, HRADIUS=28;
 function horizonScan(){
   const T=GW*GH, R=Math.max(2,Math.round(HRADIUS/CELL));
-  SVF=new Float32Array(T); OPN=new Float32Array(T);
+  SVF=new Float32Array(T); OPN=new Float32Array(T); POS=new Float32Array(T);
   const rays=[];
   for(let k=0;k<HDIRS;k++){
     const th=k*2*Math.PI/HDIRS, cx=Math.cos(th), cz=Math.sin(th), steps=[];
@@ -714,20 +718,30 @@ function horizonScan(){
   const HALFPI=Math.PI/2;
   for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
     const d=j*GW+i, z0=Zm[d];
-    let sSvf=0, sOpn=0;
+    let sSvf=0, sOpn=0, sPos=0;
     for(let k=0;k<HDIRS;k++){
-      const r=rays[k]; let up=0, dn=0;          // tangents, flat horizon = 0
+      const r=rays[k]; let up=-1e30, dn=1e30, seen=false;
       for(let q=0;q<r.length;q+=3){
         const ii=i+r[q], jj=j+r[q+1];
         if(ii<0||ii>=GW||jj<0||jj>=GH) break;
         const t=(Zm[jj*GW+ii]-z0)/r[q+2];
-        if(t>up)up=t; else if(t<dn)dn=t;
+        if(t>up)up=t;
+        if(t<dn)dn=t;
+        seen=true;
       }
+      if(!seen){up=0;dn=0;}
+      // Left unclamped on purpose. On a convex summit every ray looks
+      // downwards, so the horizon angle is negative and openness exceeds 90deg
+      // — clamping it at a flat horizon would collapse precisely the features
+      // this is meant to separate. Sky-view does clamp, because the sky cannot
+      // be more than fully open.
       const gamma=Math.atan(up), delta=Math.atan(dn);
-      sSvf += 1-Math.sin(gamma);
+      sSvf += 1-Math.sin(Math.max(0,gamma));
+      sPos += HALFPI-gamma;                     // positive openness
       sOpn += (HALFPI-gamma)-(HALFPI+delta);    // PO - NO, i.e. -(gamma+delta)
     }
     SVF[d]=sSvf/HDIRS;
+    POS[d]=sPos/HDIRS;                          // radians
     OPN[d]=sOpn/HDIRS;                          // radians; >0 convex, <0 concave
   }
 }
@@ -793,13 +807,14 @@ const surfMat=new THREE.ShaderMaterial({
   uniforms:{uH:{value:null},uLrm:{value:null},uTexel:{value:new THREE.Vector2(1/160,1/160)},uCell:{value:1},uRange:{value:1},
     uVex:{value:1},uSun:{value:new THREE.Vector3(0,1,0)},uShade:{value:0},
     uLut:{value:null},uBands:{value:0},uClip:{value:new THREE.Vector2(0,1)},uHasLrm:{value:0},
-    uAux:{value:null},uHasAux:{value:0}},
+    uSvfT:{value:null},uOpnT:{value:null},uPosT:{value:null},uHasAux:{value:0},
+    uAlt:{value:25}},
   vertexShader:'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
   fragmentShader:[
     'precision highp float;',
-    'uniform sampler2D uH,uLut,uLrm,uAux;',
+    'uniform sampler2D uH,uLut,uLrm,uSvfT,uOpnT,uPosT;',
     'uniform vec2 uTexel;',
-    'uniform float uCell,uRange,uVex,uShade,uBands,uHasLrm,uHasAux;',
+    'uniform float uCell,uRange,uVex,uShade,uBands,uHasLrm,uHasAux,uAlt;',
     'uniform vec3 uSun; uniform vec2 uClip;',
     'varying vec2 vUv;',
     'float dec(vec4 t){ return (t.r*255.0*256.0 + t.g*255.0)/65535.0; }',
@@ -841,8 +856,46 @@ const surfMat=new THREE.ShaderMaterial({
     '    col = texture2D(uLut, vec2(clamp(r,0.0,1.0),0.5)).rgb * (0.55+0.45*sh); }',
     // Sky-view factor and openness are deliberately unlit. Modulating them by a
     // hillshade would reintroduce exactly the directional bias they remove.
-    '  else { float a = uHasAux>0.5 ? dec(texture2D(uAux,clamp(vUv,0.0,1.0))) : 0.5;',
+    '  else if(uShade < 4.5){ float a = uHasAux>0.5 ? dec(texture2D(uSvfT,clamp(vUv,0.0,1.0))) : 0.5;',
     '    col = texture2D(uLut, vec2(clamp(a,0.0,1.0),0.5)).rgb; }',
+    '  else if(uShade < 5.5){ float a = uHasAux>0.5 ? dec(texture2D(uOpnT,clamp(vUv,0.0,1.0))) : 0.5;',
+    '    col = texture2D(uLut, vec2(clamp(a,0.0,1.0),0.5)).rgb; }',
+    // Multi-directional hillshade — Mark 1992 / Tait 2010, the same weighting
+    // GDAL uses for -multidirectional. Four azimuths combined with a sin^2
+    // weight against the slope aspect, so no single sun angle stripes the
+    // image and slopes facing away from one light still get modelled.
+    '  else if(uShade < 6.5){',
+    '    vec2 g = vec2((hR-hL), (hU-hD)) * k;',
+    '    vec2 face = length(g) > 1e-6 ? normalize(-g) : vec2(0.0,1.0);',
+    '    float e = radians(uAlt);',
+    '    float acc = 0.0, wsum = 0.0;',
+    '    for(int i=0;i<4;i++){',
+    '      float A = radians(225.0 + 45.0*float(i));',
+    '      vec2 s2 = vec2(sin(A), -cos(A));',
+    '      float c = dot(s2, face);',
+    '      float w = 1.0 - c*c;',
+    '      vec3 sd = normalize(vec3(s2.x*cos(e), sin(e), s2.y*cos(e)));',
+    '      acc += max(0.0, dot(n, sd)) * w; wsum += w;',
+    '    }',
+    '    float m = wsum > 1e-6 ? acc/wsum : 0.0;',
+    '    col = vec3(0.12 + 0.88*m); }',
+    // VAT — Visualization for Archaeological Topography, the Relief
+    // Visualization Toolbox default. Sky-view factor as the base (hollows dark,
+    // open surfaces bright), positive openness laid over it to lift convex
+    // micro-relief, then darkened by slope to give scarps and banks their edge.
+    // One image that shows cuts AND mounds without committing to a method.
+    '  else {',
+    '    float a = uHasAux>0.5 ? dec(texture2D(uSvfT,clamp(vUv,0.0,1.0))) : 0.5;',
+    '    float b = uHasAux>0.5 ? dec(texture2D(uPosT,clamp(vUv,0.0,1.0))) : 0.5;',
+    '    float ov = a < 0.5 ? (2.0*a*b) : (1.0 - 2.0*(1.0-a)*(1.0-b));',
+    '    float v = a*0.5 + ov*0.5;',
+    '    float sl = clamp(acos(clamp(n.y,-1.0,1.0))/1.2, 0.0, 1.0);',
+    '    v *= (1.0 - 0.5*sl);',
+    // Gentle farmland pins sky-view near 1, so the composite would sit almost
+    // white with the micro-relief crushed into the top of the range. Gamma
+    // deepens the midtones and gives it back. Tunable by eye, as in RVT.
+    '    v = pow(clamp(v,0.0,1.0), 1.35);',
+    '    col = vec3(v); }',
     '  gl_FragColor = vec4(col,1.0);',
     '}'].join('\n')
 });
@@ -937,7 +990,12 @@ function installDEM(dem){
   if(lrmTex){lrmTex.dispose();lrmTex=null;} surfMat.uniforms.uHasLrm.value=0;
   if(svfTex){svfTex.dispose();svfTex=null;}
   if(opnTex){opnTex.dispose();opnTex=null;}
-  SVF=null; OPN=null; surfMat.uniforms.uHasAux.value=0; surfMat.uniforms.uAux.value=null;
+  if(posTex){posTex.dispose();posTex=null;}
+  SVF=null; OPN=null; POS=null;
+  surfMat.uniforms.uHasAux.value=0;
+  surfMat.uniforms.uSvfT.value=null;
+  surfMat.uniforms.uOpnT.value=null;
+  surfMat.uniforms.uPosT.value=null;
   surfMat.uniforms.uH.value=hTex;
   surfMat.uniforms.uTexel.value.set(1/GW,1/GH);
   surfMat.uniforms.uCell.value=CELL;
@@ -1381,10 +1439,15 @@ function paintRamp(){
 function paintLegend(){
   const el=$('#legendbar');el.innerHTML='';
   const sh=surfMat.uniforms.uShade.value;
-  if(mode!=='points'&&sh===0){
-    for(let i=0;i<34;i++){const b=document.createElement('i');const v=Math.round((0.16+0.84*(i/33))*255);
+  // hillshade, multi-hillshade and VAT all render greyscale, so the ramp is
+  // greyscale too — only the end labels differ
+  if(mode!=='points'&&(sh===0||sh===6||sh===7)){
+    const dark=sh===7?0.0:0.16;
+    for(let i=0;i<34;i++){const b=document.createElement('i');const v=Math.round((dark+(1-dark)*(i/33))*255);
       b.style.background='rgb('+v+','+v+','+v+')';el.appendChild(b);}
-    $('#lo').textContent='Shadow';$('#hi').textContent='Lit';return;
+    if(sh===7){$('#lo').textContent='Hollow';$('#hi').textContent='Raised';}
+    else{$('#lo').textContent='Shadow';$('#hi').textContent='Lit';}
+    return;
   }
   if(attr==='class'&&mode==='points'){
     CSETS[PAL[pal].cls][theme].forEach(h=>{const i=document.createElement('i');i.style.background=h;el.appendChild(i);});
@@ -1408,7 +1471,8 @@ function paintLegend(){
 function paintSwatches(){CSETS[PAL[pal].cls][theme].forEach((h,i)=>{$('#sw'+i).style.background=h;});}
 function hud(){
   $('#capsub').textContent=mode==='points'?'Point cloud':mode==='surface'?'Bare earth':'Points + surface';
-  const shd=['Hillshade','Tinted relief','Slope','Local relief','Sky-view factor','Openness'][surfMat.uniforms.uShade.value];
+  const shd=['Hillshade','Tinted relief','Slope','Local relief','Sky-view factor',
+             'Openness','Multi-hillshade','VAT composite'][surfMat.uniforms.uShade.value];
   $('#cap').textContent=mode==='points'
     ?(sep<.02?(vex>1.05?'Exaggerated':'Composite'):(sepBy==='class'?'Class split':'Elevation split')):shd;
   $('#spine').textContent=mode==='points'?'Point cloud':'Bare earth DEM · '+GW+' × '+GH;
@@ -1434,6 +1498,7 @@ function updateSun(){
   surfMat.uniforms.uSun.value.set(Math.sin(a)*Math.cos(e),Math.sin(e),-Math.cos(a)*Math.cos(e));
   $('#azval').textContent=Math.round(azDeg)+'\u00b0';
   $('#altval').textContent=Math.round(altDeg)+'\u00b0';
+  surfMat.uniforms.uAlt.value=altDeg;
 }
 function surfaceY(x,z){
   const i=Math.max(0,Math.min(GW-1,Math.round((x+SPANX)/CELL)));
@@ -1686,19 +1751,26 @@ function buildShadeTex(v){
     const m=Math.max(Math.abs(lo),Math.abs(hi))||1;
     lrmTex=packTex(L,-m,m,GW,GH);surfMat.uniforms.uLrm.value=lrmTex;surfMat.uniforms.uHasLrm.value=1;
   }
-  if(v===4||v===5){
+  // 4 sky-view, 5 openness, 7 VAT (needs sky-view + positive openness together)
+  if(v===4||v===5||v===7){
     needHorizon();
-    if(v===4&&!svfTex){
+    if(!svfTex&&(v===4||v===7)){
       const [lo,hi]=pctRange(SVF,0.02,0.98);
       svfTex=packTex(SVF,lo,hi,GW,GH);
+      surfMat.uniforms.uSvfT.value=svfTex;
     }
-    if(v===5&&!opnTex){
+    if(!opnTex&&v===5){
       // symmetric about zero so mid-ramp reads as genuinely flat ground
       const [lo,hi]=pctRange(OPN,0.02,0.98);
       const m=Math.max(Math.abs(lo),Math.abs(hi))||1;
       opnTex=packTex(OPN,-m,m,GW,GH);
+      surfMat.uniforms.uOpnT.value=opnTex;
     }
-    surfMat.uniforms.uAux.value = v===4?svfTex:opnTex;
+    if(!posTex&&v===7){
+      const [lo,hi]=pctRange(POS,0.02,0.98);
+      posTex=packTex(POS,lo,hi,GW,GH);
+      surfMat.uniforms.uPosT.value=posTex;
+    }
     surfMat.uniforms.uHasAux.value = 1;
   }
 }
