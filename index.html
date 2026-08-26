@@ -323,9 +323,9 @@
       <div class="src">
         <div class="srcmeta" id="srcmeta">—</div>
         <button class="loadbtn" id="loadbtn" style="margin-top:11px">Open DEM file</button>
-        <input type="file" id="fileinput" accept=".tif,.tiff,.asc,.txt,.grd" style="display:none">
+        <input type="file" id="fileinput" accept=".tif,.tiff,.asc,.txt,.grd,.las,.laz" style="display:none">
         <div class="how">
-          Get one free: portal.opentopography.org → USGS 3DEP → draw a box → GeoTIFF, 1 m, bare earth. Also reads ESRI ASCII grid (.asc).
+          Get one free: portal.opentopography.org → USGS 3DEP → draw a box → GeoTIFF, 1 m, bare earth. Also reads ESRI ASCII grid (.asc) and classified point clouds (.las / .laz), which are gridded from ground returns only.
         </div>
       </div>
     </div>
@@ -446,7 +446,7 @@
       </div>
     </div>
 
-    <div class="mark"><span>v0.8</span><b>Klinekraft</b></div>
+    <div class="mark"><span>v0.9</span><b>Klinekraft</b></div>
   </div>
 </section>
 
@@ -546,7 +546,8 @@ for(let i=0;i<120;i++){
   if(MOUNDS.some(m=>Math.hypot(x-m.x,z-m.z)<m.r*1.5)) continue;
   TREE.push({x,z,r:2.4+hash(i,3)*3.2,h:6+hash(i,21)*10});
 }
-const pos=new Float32Array(N*3),cls=new Float32Array(N),pElev=new Float32Array(N),intn=new Float32Array(N);
+let pos=new Float32Array(N*3),cls=new Float32Array(N),pElev=new Float32Array(N),intn=new Float32Array(N);
+let NP=N;                                   // active point count (demo, or a loaded cloud)
 let pMin=1e9,pMax=-1e9,k=0;
 const put=(x,y,z,c,it)=>{pos[k*3]=x;pos[k*3+1]=y;pos[k*3+2]=z;cls[k]=c;intn[k]=it;if(y<pMin)pMin=y;if(y>pMax)pMax=y;k++;};
 while(k<N){
@@ -560,7 +561,7 @@ while(k<N){
   }else{const x=(Math.random()-.5)*DSPAN*2,z=(Math.random()-.5)*DSPAN*2;
     put(x,terr(x,z)+Math.random()*.18,z,0,.16+Math.random()*.28);}
 }
-const pRange=pMax-pMin;
+let pRange=pMax-pMin;
 for(let i=0;i<N;i++)pElev[i]=(pos[i*3+1]-pMin)/pRange;
 
 /* ══ mutable terrain grid ══ */
@@ -1037,7 +1038,7 @@ function installDEM(dem){
 }
 function updateStats(){
   const acres=areaM2()/4046.86;
-  $('#stats').innerHTML= (hasPoints? '<b>'+N.toLocaleString()+'</b> pts<br>' : '')+
+  $('#stats').innerHTML= (hasPoints? '<b>'+NP.toLocaleString()+'</b> pts<br>' : '')+
     '<b>'+GW+' × '+GH+'</b> @ '+CELL.toFixed(2)+' m<br>'+
     acres.toFixed(1)+' acres<br>'+demName;
   $('#srcmeta').innerHTML='<b>'+demName+'</b><br>'+demNote+'<br>'+
@@ -1386,6 +1387,219 @@ async function parseTIFF(file){
     note:w+' × '+h+' raster'+(unote?' · '+unote:'')};
 }
 
+/* ══ LAS / LAZ reader ══
+
+   Point coordinates are stored as int32 with a scale and offset, in whatever
+   units the file's CRS uses — and for USGS tiles in Oklahoma that is State
+   Plane US survey feet, vertically as well as horizontally. Same trap as the
+   GeoTIFF path, so the same treatment: resolve units from the CRS and convert
+   everything to metres before it reaches the grid.
+
+   The bare-earth DEM is built from class 2 (ground) returns only, taking the
+   lowest return in each cell. Vegetation and buildings are kept for display but
+   never reach the terrain model — putting them there is what makes a scan
+   report tree canopy as earthworks. */
+const LASMAXPTS = 1200000;               // display cap; the DEM uses every ground return
+
+function lasUnits(wkt, geokeys, ascii){
+  let hf=null, vf=null, src='assumed metres';
+  if(geokeys){
+    if(LINUNIT[geokeys[3076]]) { hf=LINUNIT[geokeys[3076]]; src='unit geokey'; }
+    if(LINUNIT[geokeys[4099]]) vf=LINUNIT[geokeys[4099]];
+  }
+  const text=[wkt,ascii].filter(Boolean).join(' | ');
+  if((hf===null||vf===null)&&text){
+    // A compound CRS names its vertical unit separately; take the last match so
+    // a "+ NAVD88 height (ftUS)" suffix wins for the vertical.
+    const us=/ftus|us\s*survey\s*(foot|feet|ft)/i.test(text);
+    if(us||/\bfeet\b|\bfoot\b|\(\s*ft\s*\)/i.test(text)){
+      const f=us?1200/3937:0.3048;
+      if(hf===null){hf=f;src='CRS text';}
+      if(vf===null) vf=f;
+    }
+  }
+  if(hf===null) hf=1;
+  if(vf===null) vf=hf;
+  return {hf,vf,src,name:hf===1?'m':(Math.abs(hf-0.3048)<1e-6?'ft':'ftUS')};
+}
+
+function parseLASHeader(buf){
+  const dv=new DataView(buf);
+  if(dv.getUint8(0)!==76||dv.getUint8(1)!==65||dv.getUint8(2)!==83||dv.getUint8(3)!==70)
+    throw new Error('Not a LAS or LAZ file');
+  const verMin=dv.getUint8(25);
+  const headerSize=dv.getUint16(94,true);
+  const offsetToData=dv.getUint32(96,true);
+  const numVLR=dv.getUint32(100,true);
+  let fmt=dv.getUint8(104);
+  const compressed=(fmt&0x80)!==0;       // high bit of the format byte marks LAZ
+  fmt&=0x3f;
+  const ptLen=dv.getUint16(105,true);
+  let count=dv.getUint32(107,true);
+  if(verMin>=4&&headerSize>=375){        // 1.4 moved the count to 64-bit
+    const lo=dv.getUint32(247,true), hi=dv.getUint32(251,true);
+    const big=hi*4294967296+lo;
+    if(big>0) count=big;
+  }
+  if(!count) throw new Error('LAS file reports no points');
+  return {verMin,headerSize,offsetToData,numVLR,fmt,compressed,ptLen,count,
+    sx:dv.getFloat64(131,true), sy:dv.getFloat64(139,true), sz:dv.getFloat64(147,true),
+    ox:dv.getFloat64(155,true), oy:dv.getFloat64(163,true), oz:dv.getFloat64(171,true),
+    maxX:dv.getFloat64(179,true), minX:dv.getFloat64(187,true),
+    maxY:dv.getFloat64(195,true), minY:dv.getFloat64(203,true),
+    maxZ:dv.getFloat64(211,true), minZ:dv.getFloat64(219,true)};
+}
+
+function parseLASVlrs(buf,hdr){
+  const dv=new DataView(buf); let o=hdr.headerSize;
+  let wkt=null, ascii=null, geokeys=null;
+  const str=(at,len)=>{let r='';for(let i=0;i<len;i++){const c=dv.getUint8(at+i);if(!c)break;r+=String.fromCharCode(c);}return r;};
+  for(let v=0; v<hdr.numVLR && o+54<=buf.byteLength; v++){
+    const user=str(o+2,16), rec=dv.getUint16(o+18,true), len=dv.getUint16(o+20,true);
+    const body=o+54;
+    if(body+len>buf.byteLength) break;
+    if(user.indexOf('LASF_Projection')===0){
+      if(rec===2112) wkt=str(body,len);
+      else if(rec===34737) ascii=str(body,len);
+      else if(rec===34735){                       // GeoKeyDirectoryTag
+        geokeys={};
+        const nk=dv.getUint16(body+6,true);
+        for(let k=0;k<nk;k++){
+          const e=body+8+k*8;
+          if(e+8>buf.byteLength) break;
+          if(dv.getUint16(e+2,true)===0) geokeys[dv.getUint16(e,true)]=dv.getUint16(e+6,true);
+        }
+      }
+    }
+    o=body+len;
+  }
+  return {wkt,ascii,geokeys};
+}
+
+async function parseLAS(file,stage){
+  const head=new Uint8Array(await file.slice(0,Math.min(65536,file.size)).arrayBuffer());
+  const hdr=parseLASHeader(head.buffer);
+  const {wkt,ascii,geokeys}=parseLASVlrs(head.buffer,hdr);
+  const u=lasUnits(wkt,geokeys,ascii);
+
+  // ground extent in metres
+  const wM=(hdr.maxX-hdr.minX)*u.hf, hM=(hdr.maxY-hdr.minY)*u.hf;
+  if(!(wM>0&&hM>0)) throw new Error('LAS bounds are empty');
+  // cell no finer than the point spacing supports, and a grid within MAXG
+  const spacing=Math.sqrt((wM*hM)/hdr.count);
+  let cell=Math.max(wM/(MAXG-1), hM/(MAXG-1), spacing*1.4, 0.25);
+  const gw=Math.max(2,Math.min(MAXG,Math.floor(wM/cell)+1));
+  const gh=Math.max(2,Math.min(MAXG,Math.floor(hM/cell)+1));
+
+  const T=gw*gh, acc=new Float32Array(T).fill(Infinity);
+  const cap=Math.min(LASMAXPTS,hdr.count);
+  const stride=Math.max(1,Math.floor(hdr.count/cap));
+  const sx=new Float32Array(cap),sy=new Float32Array(cap),sz=new Float32Array(cap),
+        sc=new Uint8Array(cap),si=new Float32Array(cap);
+  let ground=0, kept=0;
+
+  // classification sits at byte 15 in formats 0-5 and byte 16 in 6-10
+  const clsOff=hdr.fmt>=6?16:15, legacy=hdr.fmt<6;
+  const take=(dv,at,i)=>{
+    const xi=dv.getInt32(at,true), yi=dv.getInt32(at+4,true), zi=dv.getInt32(at+8,true);
+    const X=(xi*hdr.sx+hdr.ox), Y=(yi*hdr.sy+hdr.oy), Z=(zi*hdr.sz+hdr.oz);
+    let c=dv.getUint8(at+clsOff); if(legacy) c&=0x1f;
+    if(c===2){                                   // ground -> bare-earth grid
+      const gi=Math.floor(((X-hdr.minX)*u.hf)/cell), gj=Math.floor(((hdr.maxY-Y)*u.hf)/cell);
+      if(gi>=0&&gi<gw&&gj>=0&&gj<gh){
+        const d=gj*gw+gi, z=Z*u.vf;
+        if(z<acc[d]) acc[d]=z;
+        ground++;
+      }
+    }
+    if(i%stride===0&&kept<cap){                  // sample for display
+      sx[kept]=(X-hdr.minX)*u.hf; sy[kept]=Z*u.vf; sz[kept]=(hdr.maxY-Y)*u.hf;
+      sc[kept]=c===2?0:(c===6?1:(c===5||c===4||c===3?2:0));
+      si[kept]=dv.getUint16(at+12,true);
+      kept++;
+    }
+  };
+
+  if(hdr.compressed){
+    if(!window.createLazPerf){
+      await loadScript([
+        'https://cdn.jsdelivr.net/npm/laz-perf@0.0.7/lib/web/laz-perf.js',
+        'https://unpkg.com/laz-perf@0.0.7/lib/web/laz-perf.js'
+      ]);
+    }
+    if(!window.createLazPerf) throw new Error('laz-perf unavailable');
+    const LP=await createLazPerf();
+    const bytes=new Uint8Array(await file.arrayBuffer());
+    const fp=LP._malloc(bytes.length); LP.HEAPU8.set(bytes,fp);
+    const pp=LP._malloc(hdr.ptLen);
+    const zip=new LP.LASZip();
+    try{
+      zip.open(fp,bytes.length);
+      let heap=LP.HEAPU8.buffer;
+      let pv=new DataView(heap,pp,hdr.ptLen);
+      for(let i=0;i<hdr.count;i++){
+        zip.getPoint(pp);
+        if(LP.HEAPU8.buffer!==heap){          // heap grew — rebuild the view
+          heap=LP.HEAPU8.buffer;
+          pv=new DataView(heap,pp,hdr.ptLen);
+        }
+        take(pv,0,i);
+        if((i&0x3ffff)===0&&stage) await stage('Decompressing '+(i/1e6).toFixed(1)+'M of '+
+          (hdr.count/1e6).toFixed(1)+'M points', 35+40*i/hdr.count);
+      }
+    } finally { zip.delete(); LP._free(pp); LP._free(fp); }
+  } else {
+    const bytes=new Uint8Array(await file.arrayBuffer());
+    const dv=new DataView(bytes.buffer);
+    let o=hdr.offsetToData;
+    for(let i=0;i<hdr.count&&o+hdr.ptLen<=bytes.length;i++,o+=hdr.ptLen){
+      take(dv,o,i);
+      if((i&0x3ffff)===0&&stage) await stage('Reading '+(i/1e6).toFixed(1)+'M of '+
+        (hdr.count/1e6).toFixed(1)+'M points', 35+40*i/hdr.count);
+    }
+  }
+
+  if(!ground) throw new Error('No ground (class 2) returns — this file is not classified');
+  fillHoles(acc,gw,gh);
+  return {vals:acc, gw, gh, cell,
+    name:file.name.replace(/\.[^.]+$/,''),
+    note:hdr.count.toLocaleString()+' pts · '+ground.toLocaleString()+' ground · '+
+         u.name+' ('+u.src+')'+(hdr.compressed?' · LAZ':' · LAS'),
+    points:{x:sx,y:sy,z:sz,c:sc,i:si,n:kept}};
+}
+
+/* Replace the point cloud with returns decoded from a LAS/LAZ file. Positions
+   arrive in metres relative to the tile's north-west corner and are recentred
+   on the DEM, so points and surface stay registered in Both mode. */
+function installPoints(p,dem){
+  const m=p.n;
+  if(!m){hasPoints=false;return;}
+  const spanx=(dem.gw-1)*dem.cell/2, spanz=(dem.gh-1)*dem.cell/2;
+  pos=new Float32Array(m*3); cls=new Float32Array(m);
+  pElev=new Float32Array(m); intn=new Float32Array(m);
+  pMin=1e9;pMax=-1e9;
+  let iMax=1;
+  for(let i=0;i<m;i++){const v=p.i[i];if(v>iMax)iMax=v;}
+  for(let i=0;i<m;i++){
+    const y=p.y[i];
+    pos[i*3]=p.x[i]-spanx; pos[i*3+1]=y; pos[i*3+2]=p.z[i]-spanz;
+    cls[i]=p.c[i]; intn[i]=p.i[i]/iMax;
+    if(y<pMin)pMin=y; if(y>pMax)pMax=y;
+  }
+  pRange=Math.max(1e-3,pMax-pMin);
+  for(let i=0;i<m;i++) pElev[i]=(pos[i*3+1]-pMin)/pRange;
+  NP=m; hasPoints=true;
+  geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  geo.setAttribute('aFrom',new THREE.BufferAttribute(new Float32Array(m*3),3));
+  geo.setAttribute('aTo',new THREE.BufferAttribute(new Float32Array(m*3),3));
+  geo.setAttribute('aClass',new THREE.BufferAttribute(cls,1));
+  geo.setAttribute('aElev',new THREE.BufferAttribute(pElev,1));
+  geo.setAttribute('aBand',new THREE.BufferAttribute(new Float32Array(m),1));
+  geo.setDrawRange(0,m);
+  geo.computeBoundingSphere();
+  mat.uniforms.uBase.value=pMin;
+}
+
 /* ══ display plumbing ══ */
 function makeLutTex(){
   if(lutTex)lutTex.dispose();
@@ -1398,7 +1612,7 @@ function makeLutTex(){
 }
 function assignBands(){
   const a=geo.attributes.aBand.array;
-  for(let i=0;i<N;i++) a[i]= sepBy==='class'?cls[i]:Math.min(layers-1,(pElev[i]*layers)|0);
+  for(let i=0;i<NP;i++) a[i]= sepBy==='class'?cls[i]:Math.min(layers-1,(pElev[i]*layers)|0);
   geo.attributes.aBand.needsUpdate=true;buildFrames();
 }
 function buildFrames(){
@@ -1414,9 +1628,9 @@ function buildFrames(){
 }
 function recolor(instant){
   const f=geo.attributes.aFrom.array,t=geo.attributes.aTo.array,m=mat.uniforms.uMix.value;
-  if(!instant) for(let i=0;i<N*3;i++) f[i]=f[i]+(t[i]-f[i])*m;
+  if(!instant) for(let i=0;i<NP*3;i++) f[i]=f[i]+(t[i]-f[i])*m;
   const L=LUTS[pal][theme],cc=CSETS[PAL[pal].cls][theme].map(hx);
-  for(let i=0;i<N;i++){
+  for(let i=0;i<NP;i++){
     let c;
     if(attr==='class') c=cc[cls[i]];
     else{let v=attr==='intens'?intn[i]:pElev[i];
@@ -1709,19 +1923,27 @@ $('#fileinput').onchange=async e=>{
   await stg('Reading '+file.name,10);
   try{
     let dem;
-    if(/\.(tif|tiff)$/i.test(file.name)){
+    if(/\.(las|laz)$/i.test(file.name)){
+      await stg('Reading point cloud header',20);
+      dem=await parseLAS(file,stg);
+    }else if(/\.(tif|tiff)$/i.test(file.name)){
       await stg('Decoding GeoTIFF',35);
       dem=await parseTIFF(file);
     }else{
       await stg('Parsing ASCII grid',35);
       dem=parseASC(await file.text());
     }
-    await stg('Building terrain model',72);
-    hasPoints=false; mode='surface';
-    segSet('#mode','surface','m');
-    document.querySelectorAll('#mode button').forEach(b=>{if(b.dataset.m!=='surface')b.disabled=true;});
-    document.querySelectorAll('#chips .chip').forEach(b=>b.disabled=true);
+    await stg('Building terrain model',80);
+    const withPts=!!(dem.points&&dem.points.n);
+    hasPoints=withPts;
+    if(withPts) installPoints(dem.points,dem);
+    mode=withPts?'both':'surface';
+    segSet('#mode',mode,'m');
+    document.querySelectorAll('#mode button').forEach(b=>{b.disabled=!withPts&&b.dataset.m!=='surface';});
+    document.querySelectorAll('#chips .chip').forEach(b=>{b.disabled=!withPts;});
+    if(withPts){setChip(0,1);setChip(1,1);setChip(2,1);}
     installDEM(dem);
+    if(withPts){assignBands();recolor(true);}
     await stg('Ready',100);
     await new Promise(r=>setTimeout(r,300));
     document.body.classList.remove('scanning');

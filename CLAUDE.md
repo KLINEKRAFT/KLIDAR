@@ -11,7 +11,7 @@ Personal project under KLINEKRAFT. Static site, deployed on Vercel.
 ## What it does
 
 1. Renders a bare-earth DEM as a shaded 3D surface, or a classified point
-   cloud, or both.
+   cloud, or both. Reads GeoTIFF, ESRI ASCII grid, and LAS/LAZ point clouds.
 2. Gives the operator the controls that actually reveal subtle earthworks:
    movable sun, vertical exaggeration, contour banding, local relief model,
    slope shading, elevation clipping.
@@ -34,13 +34,13 @@ Read top to bottom; it is organised in these blocks.
 | Block | What lives there |
 |---|---|
 | Palettes | `PAL` ramps + `CSETS` class colors, both keyed by `dark`/`light`. 256-entry LUTs precomputed into `LUTS`. |
-| Demo point cloud | Synthetic 100k-point tile with 5 planted mounds and 1 linear earthwork. Only dataset that has points. |
+| Point cloud | Synthetic 100k demo tile, or returns decoded from a LAS/LAZ file. `NP` is the live count; `pos`/`cls`/`pElev`/`intn` are reassigned by `installPoints`, so never loop to `N`. |
 | Mutable terrain grid | `GW, GH, CELL, SPANX, SPANZ, SPAN, Zm, Hn, gx, gz, slope, zMin, zMax, zRange`. All rebuilt by `installDEM()`. |
 | three.js setup | `scene` (points + surface), `overlay` (wireframe box + separation frames), `quadScene` (EDL composite). |
 | `installDEM(dem)` | The single entry point for new terrain. Downsamples, normalises, computes gradients, packs the height texture, rebuilds surface geometry and bounding box, resets scan results, reframes the camera. |
 | Horizon products | `HDIRS`, `HRADIUS`, `horizonScan`, `needHorizon` → `SVF`, `OPN`, `POS`. Built on demand, invalidated by `installDEM`. |
 | Scan | `SCALES`, `blur`, `components`, `analyse`, `classify`, `score`, `altFor`, `runScan`. |
-| DEM readers | `parseASC` (zero-dependency), `parseTIFF` (lazy geotiff.js). |
+| DEM readers | `parseASC` (zero-dependency), `parseTIFF` (lazy geotiff.js), `parseLAS` (lazy laz-perf for `.laz`). |
 | Display plumbing | `recolor`, `paintRamp`, `paintLegend`, `applyVex`, `updateSun`, `setTheme`. |
 | UI | Glass sheet with drag-resize + snap, candidate detail sheet, marker projection. Above 900px the same sheet becomes a collapsible left rail — one open/close state, only the axis changes. `--rail`, `--plateL` and `--sheet` keep the plate readouts clear of it. |
 | Loop | `tick()` — two render paths depending on mode. |
@@ -103,9 +103,20 @@ vertex normals.
   `GW*GH > 65536`. `MAXG` caps either dimension at 512 when
   `OES_element_index_uint`/WebGL2 is available, else 255; `installDEM` also
   halves until `GW*GH` fits when 32-bit indices are unavailable.
-- **rockyweb.usgs.gov sends no CORS headers.** Raw `.laz` tiles cannot be fetched
-  from the browser. Either convert with PDAL and self-host, or use a
-  CORS-enabled source.
+- **rockyweb.usgs.gov sends no CORS headers.** Raw `.laz` tiles cannot be
+  *fetched* from the browser — but they open fine from the file picker, which is
+  the normal route. Downloading first is the workaround; PDAL is not needed.
+- **LAS/LAZ builds the DEM from class 2 returns only.** Vegetation and buildings
+  are kept for display and never reach the terrain model; letting them in is
+  what makes a scan report tree canopy as earthworks. A file with no class 2 is
+  rejected outright rather than silently gridded from first returns.
+- **The whole LAZ file goes into the WASM heap.** `LASZip.open` takes a pointer
+  to the complete file, so peak memory is roughly twice the file size. A 10M
+  point / 87 MB tile loads in ~18 s at ~212 MB of JS heap. Emscripten replaces
+  `HEAPU8` when the heap grows, which detaches any `DataView` held across
+  `getPoint` — compare `HEAPU8.buffer` each iteration and rebuild.
+- **Display points are capped at `LASMAXPTS`** (1.2M) by striding. The DEM still
+  uses every ground return; only the drawn cloud is thinned.
 - **The scan blocks the main thread.** On a real 500² tile the horizon scan is
   ~590 ms and `runScan` ~4 s, both behind the progress overlay. The feature scan
   is the bottleneck, not the horizon products. Moving both to a Worker is the

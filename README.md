@@ -10,11 +10,16 @@ Static site, no build step. Open `index.html`, or deploy the directory as-is.
 ## Using it
 
 Open **Terrain Scan** to analyse the loaded model, or **Open DEM file** to load
-your own. Reads GeoTIFF (`.tif`) and ESRI ASCII grid (`.asc`). Free 1 m bare-earth
-data: portal.opentopography.org → USGS 3DEP → draw a box → GeoTIFF.
+your own. Reads GeoTIFF (`.tif`), ESRI ASCII grid (`.asc`), and classified point
+clouds (`.las` / `.laz`).
 
-Rasters do not need to be square, and NODATA voids are interpolated from the
-surrounding valid cells.
+Free 1 m bare-earth data: portal.opentopography.org → USGS 3DEP → draw a box →
+GeoTIFF. Point clouds work straight from the USGS download — no PDAL step.
+
+Rasters do not need to be square, NODATA voids are interpolated from surrounding
+valid cells, and files in State Plane feet are converted to metres from their
+CRS rather than assumed. Point clouds are gridded from ground (class 2) returns
+only, so vegetation and buildings never enter the terrain model.
 
 ## What it is not
 

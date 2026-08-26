@@ -72,20 +72,22 @@ no upload.
 
 ---
 
-## Phase 3 — Real point clouds via COPC (effort: one to two days)
+## Phase 3 — Real point clouds (local files done, streaming still open)
 
-The point cloud path currently only has synthetic demo data.
-
-- Add `laz-perf` (WASM decode) and `copc.js` (octree over HTTP range requests).
-- Load a `.copc.laz` from a URL or a local file.
-- Stream by octree node, respecting the current camera — do not load the whole
-  tile.
-- Wire real LAS classification codes: 2 ground, 5 high vegetation, 6 building.
-  The existing three-class chip UI maps directly.
-- Grid ground returns into the DEM using the code already in `demoDEM()`.
-
-**Source:** Microsoft Planetary Computer serves USGS 3DEP as COPC with CORS.
-That is the target. USGS rockyweb is not fetchable from a browser.
+- ~~Add `laz-perf` (WASM decode)~~ — done, lazy-loaded like geotiff.js.
+- ~~Load a `.las` / `.laz` from a local file~~ — done, via the file picker. No
+  CORS problem, because nothing is fetched.
+- ~~Wire real LAS classification codes: 2 ground, 5 high vegetation, 6
+  building~~ — done; the three-class chip UI maps directly.
+- ~~Grid ground returns into the DEM~~ — done, lowest class 2 return per cell.
+- **Still open: streaming.** The whole file goes into the WASM heap, so peak
+  memory is about twice the file size and a 10M point tile takes ~18 s. For
+  tiles beyond ~30M points this needs `copc.js` and octree nodes over HTTP range
+  requests, loading only what the camera needs. Microsoft Planetary Computer
+  serves USGS 3DEP as COPC with CORS and is the target for that.
+- **Still open: level of detail.** Display is capped at 1.2M points by striding.
+  `c42f/displaz` has the right idea — fit observed frame time against vertex
+  count and derive a quality factor, rather than a fixed cap.
 
 ---
 
