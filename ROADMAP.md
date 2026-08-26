@@ -89,23 +89,24 @@ That is the target. USGS rockyweb is not fetchable from a browser.
 
 ---
 
-## Phase 4 — Better detection (effort: one to two days)
+## Phase 4 — Better detection (mostly done)
 
-The original spec listed visualizations not yet implemented. These are the ones
-archaeologists actually rely on:
+- ~~**Sky-view factor**~~ — done. 16 azimuths, 28 m search radius, rendered with
+  a 2–98% percentile stretch.
+- ~~**Positive / negative openness**~~ — done, rendered as the difference
+  (`PO − NO`), symmetric about zero so mid-ramp is flat ground.
+- ~~Feed these into the confidence score as independent indicators~~ — done, as
+  contrast against a surrounding ring, worth 10 and 7 points, with a −12
+  counter-indication when openness contradicts the claimed form.
+- **Multi-hillshade blend** — still open. Render 16 azimuths and combine, either
+  PCA or simple max. Less urgent now that two illumination-independent products
+  exist, but it would let the hillshade term carry real weight again.
 
-- **Sky-view factor** — the single best product for shallow earthworks. Sample
-  horizon angle in 16 directions per cell.
-- **Positive / negative openness** — closely related, excellent for ditches and
-  banks.
-- **Multi-hillshade blend** — render 16 azimuths and combine, either PCA or
-  simple max. Removes the directional bias entirely.
-- Feed all of these into the confidence score as additional independent
-  indicators, per the "should remain detectable across multiple representations"
-  rule.
-
-Also move `runScan` into a **Web Worker** with progress messages. The staged
-progress UI already exists; it just needs real events instead of timed stages.
+Still open: move `horizonScan` and `runScan` into a **Web Worker** with progress
+messages. On a real 500² tile they cost ~590 ms and ~4 s respectively, both
+blocking behind the progress overlay, and the staged progress UI is still timed
+rather than event-driven. `runScan` is the bottleneck — profile `components`,
+`analyse` and the 8-azimuth `dirs` loop before optimising anything else.
 
 ---
 

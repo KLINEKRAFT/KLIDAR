@@ -15,6 +15,8 @@
     --glassline:rgba(255,255,255,.28);
     --shadow:rgba(0,0,0,.85);
     --sheet:0px;
+    --plateL:16px;
+    --rail:360px;
   }
   html[data-theme="light"]{
     --bg:#fff; --fg:#000;
@@ -35,11 +37,11 @@
 
   .plate{position:fixed;inset:0;pointer-events:none;z-index:2;
     text-shadow:0 0 12px var(--shadow),0 0 3px var(--shadow);}
-  .head{position:absolute;top:calc(env(safe-area-inset-top) + 16px);left:16px;right:16px;
+  .head{position:absolute;top:calc(env(safe-area-inset-top) + 16px);left:var(--plateL);right:16px;
     display:flex;align-items:center;gap:12px;}
   .head hr{flex:1;border:0;border-top:1px solid var(--line);}
   .head h1{font-size:10px;font-weight:400;letter-spacing:.42em;text-transform:uppercase;white-space:nowrap;padding-left:.42em;}
-  .stats{position:absolute;left:16px;top:calc(env(safe-area-inset-top) + 46px);
+  .stats{position:absolute;left:var(--plateL);top:calc(env(safe-area-inset-top) + 46px);
     font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);line-height:2;max-width:56vw;}
   .stats b{color:var(--fg);font-weight:400;}
   .compass{position:absolute;right:16px;top:calc(env(safe-area-inset-top) + 46px);width:44px;height:44px;}
@@ -56,7 +58,7 @@
   .spine{position:absolute;right:16px;top:50%;transform:translateY(-50%) rotate(180deg);
     writing-mode:vertical-rl;font-size:9px;letter-spacing:.34em;text-transform:uppercase;color:var(--dim);
     transition:opacity .3s;}
-  .stack{position:absolute;left:16px;bottom:calc(env(safe-area-inset-bottom) + var(--sheet) + 74px);
+  .stack{position:absolute;left:var(--plateL);bottom:calc(env(safe-area-inset-bottom) + var(--sheet) + 74px);
     width:158px;transition:bottom .06s linear;}
   .legend .bar{display:flex;height:6px;}
   .legend .bar i{flex:1;display:block;}
@@ -66,9 +68,9 @@
   .scalebar .sb{height:5px;border:1px solid var(--fg);border-top:0;opacity:.75;width:64px;}
   .scalebar span{display:block;margin-top:4px;font-size:8px;letter-spacing:.14em;
     text-transform:uppercase;color:var(--dim);}
-  .footrule{position:absolute;left:16px;right:16px;border-top:1px solid var(--line);
+  .footrule{position:absolute;left:var(--plateL);right:16px;border-top:1px solid var(--line);
     bottom:calc(env(safe-area-inset-bottom) + var(--sheet) + 56px);transition:bottom .06s linear;}
-  .foot{position:absolute;left:16px;right:16px;
+  .foot{position:absolute;left:var(--plateL);right:16px;
     bottom:calc(env(safe-area-inset-bottom) + var(--sheet) + 14px);
     display:flex;align-items:flex-end;justify-content:flex-end;transition:bottom .06s linear;}
   .foot .caption{font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;text-align:right;}
@@ -174,6 +176,8 @@
   .seg button[disabled]{opacity:.3;cursor:default;}
   .seg button:focus-visible{outline:1px solid var(--fg);outline-offset:-4px;}
   .seg.wrap{grid-auto-flow:row;grid-template-columns:repeat(5,1fr);grid-auto-columns:auto;}
+  .seg.wrap.three{grid-template-columns:repeat(3,1fr);}
+  .seg.wrap.three button:nth-child(-n+3){border-bottom:1px solid var(--line);}
   .seg.wrap button{border-right:1px solid var(--line);font-size:9px;letter-spacing:.06em;}
   .ramp{display:flex;height:24px;width:100%;border:0;padding:0;background:none;cursor:pointer;}
   .ramp i{flex:1;display:block;transition:background .2s linear;}
@@ -223,6 +227,42 @@
     background:var(--bg);color:var(--fg);}
   .fatal b{font-size:11px;font-weight:400;letter-spacing:.4em;text-transform:uppercase;}
   .fatal span{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);line-height:2;}
+  .grip{display:none;}
+
+  /* Desktop: the bottom sheet becomes a collapsible left rail. Same markup,
+     same open/close state — only the axis changes. */
+  @media (min-width:900px){
+    .sheet{
+      top:0; bottom:0; left:0; right:auto;
+      width:var(--rail); height:100% !important;
+      border-top:0; border-right:1px solid var(--glassline);
+      transform:translateX(-100%);
+      transition:transform .34s cubic-bezier(.22,.61,.36,1);
+      padding-bottom:0;
+    }
+    .sheet.snapping{transition:transform .34s cubic-bezier(.22,.61,.36,1);}
+    body.sheet-open .sheet{transform:translateX(0);}
+    .handle{cursor:default;height:auto;padding:calc(env(safe-area-inset-top) + 18px) 16px 12px;}
+    .body{padding-bottom:24px;}
+    .grip{display:block;position:absolute;top:0;right:-5px;width:10px;height:100%;
+      cursor:ew-resize;touch-action:none;z-index:1;}
+    .toggle{
+      top:calc(env(safe-area-inset-top) + 10px); bottom:auto;
+      left:var(--plateL); transform:none;
+      transition:left .34s cubic-bezier(.22,.61,.36,1);
+    }
+    body.sheet-open .toggle{left:calc(var(--rail) + 16px);}
+    .head{top:calc(env(safe-area-inset-top) + 24px);left:calc(var(--plateL) + 60px);}
+    .stats{top:calc(env(safe-area-inset-top) + 62px);}
+    /* candidate detail becomes a floating card clear of the rail */
+    .detail{
+      left:auto; right:16px; bottom:16px; width:420px; max-height:76vh;
+      border:1px solid var(--fg);
+      transform:translateY(calc(100% + 24px));
+    }
+    body.detail-open .detail{transform:translateY(0);}
+    body.detail-open .spine{opacity:0;}
+  }
   @media (max-height:680px){ .scalebar{display:none;} }
   @media (prefers-reduced-motion:reduce){*{transition:none !important;}}
 </style>
@@ -267,7 +307,8 @@
 <button class="toggle" id="toggle" aria-label="Controls" aria-expanded="false"><i></i><i></i></button>
 
 <section class="sheet" id="sheet" aria-label="Display controls">
-  <div class="handle" id="handle"><span class="mono">Controls — drag to resize</span></div>
+  <div class="handle" id="handle"><span class="mono" id="handlelab">Controls — drag to resize</span></div>
+  <div class="grip" id="grip" aria-hidden="true"></div>
   <div class="body">
 
     <div class="row">
@@ -322,11 +363,13 @@
 
     <div class="row">
       <div class="lab"><span>Surface shading</span></div>
-      <div class="seg" id="shade">
+      <div class="seg wrap three" id="shade">
         <button data-s="0" aria-pressed="true">Hillshade</button>
         <button data-s="1" aria-pressed="false">Tinted</button>
         <button data-s="2" aria-pressed="false">Slope</button>
         <button data-s="3" aria-pressed="false">Relief</button>
+        <button data-s="4" aria-pressed="false">Sky-view</button>
+        <button data-s="5" aria-pressed="false">Openness</button>
       </div>
       <div class="lab" style="margin:12px 0 0"><span>Sun azimuth</span><b id="azval">315°</b></div>
       <input type="range" id="az" min="0" max="359" value="315" aria-label="Sun azimuth">
@@ -400,7 +443,7 @@
       </div>
     </div>
 
-    <div class="mark"><span>v0.7.1</span><b>Klinekraft</b></div>
+    <div class="mark"><span>v0.8</span><b>Klinekraft</b></div>
   </div>
 </section>
 
@@ -521,6 +564,7 @@ for(let i=0;i<N;i++)pElev[i]=(pos[i*3+1]-pMin)/pRange;
 let GW=0, GH=0, CELL=1, SPAN=1, SPANX=1, SPANZ=1;
 let Zm=null, Hn=null, gx=null, gz=null, slope=null;
 let zMin=0, zMax=1, zRange=1, hTex=null, lrmTex=null, hasPoints=true;
+let SVF=null, OPN=null, svfTex=null, opnTex=null;   // horizon products, built on demand
 let demName='Demo tile', demNote='synthetic';
 
 function demoDEM(){
@@ -580,6 +624,20 @@ function smoothGrid(a,gw,gh,passes){
     }
   }
 }
+/* Percentile stretch. A plain min/max stretch on sky-view factor is useless:
+   one incised channel pins the low end and squeezes every subtle feature into
+   the top few percent of the ramp, which is exactly the detail the product
+   exists to show. Sampled, so cost does not scale with grid size. */
+function pctRange(arr,loQ,hiQ){
+  const n=arr.length, step=Math.max(1,Math.floor(n/20000)), v=[];
+  for(let i=0;i<n;i+=step) v.push(arr[i]);
+  v.sort((a,b)=>a-b);
+  const at=q=>v[Math.max(0,Math.min(v.length-1,Math.round(q*(v.length-1))))];
+  let lo=at(loQ), hi=at(hiQ);
+  if(hi-lo<1e-6){ lo=v[0]; hi=v[v.length-1]; }
+  if(hi-lo<1e-6){ hi=lo+1e-6; }
+  return [lo,hi];
+}
 function packTex(arr,lo,hi,gw,gh){
   const d=new Uint8Array(gw*gh*4);
   for(let i=0;i<gw*gh;i++){
@@ -620,6 +678,61 @@ function blur(src,r,passes){
   return a;
 }
 
+/* Horizon scan — the illumination-independent half of the analysis.
+
+   For each cell, walk `HDIRS` azimuths out to `HRADIUS` metres and record the
+   steepest upward and downward angles to the skyline.
+
+     Sky-view factor   SVF = mean(1 - sin(gamma))        Zaksek/Ostir/Kokalj 2011
+     Positive openness  PO = mean(90deg - gamma)         Yokoyama/Shirasawa/Pike 2002
+     Negative openness  NO = mean(90deg + delta)
+
+   gamma is the maximum elevation angle along a ray, delta the minimum. Flat
+   ground gives SVF 1 and PO = NO = 90deg. A mound reads high PO / low NO, a
+   ditch the reverse — and neither depends on where the sun is, which is the
+   whole point: hillshade persistence saturates at 8/8 for almost any relief,
+   so it carries little information on its own.
+
+   Ray offsets are identical for every cell, so they are precomputed once and
+   the inner loop is a bounds test plus a divide. */
+const HDIRS=16, HRADIUS=28;
+function horizonScan(){
+  const T=GW*GH, R=Math.max(2,Math.round(HRADIUS/CELL));
+  SVF=new Float32Array(T); OPN=new Float32Array(T);
+  const rays=[];
+  for(let k=0;k<HDIRS;k++){
+    const th=k*2*Math.PI/HDIRS, cx=Math.cos(th), cz=Math.sin(th), steps=[];
+    let li=0,lj=0;
+    for(let sp=1;sp<=R;sp=Math.max(sp+1,Math.round(sp*1.35))){
+      const di=Math.round(cx*sp), dj=Math.round(cz*sp);
+      if(di===li&&dj===lj) continue;            // same cell as last step
+      li=di; lj=dj;
+      steps.push(di,dj,Math.hypot(di,dj)*CELL);
+    }
+    rays.push(new Float64Array(steps));
+  }
+  const HALFPI=Math.PI/2;
+  for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
+    const d=j*GW+i, z0=Zm[d];
+    let sSvf=0, sOpn=0;
+    for(let k=0;k<HDIRS;k++){
+      const r=rays[k]; let up=0, dn=0;          // tangents, flat horizon = 0
+      for(let q=0;q<r.length;q+=3){
+        const ii=i+r[q], jj=j+r[q+1];
+        if(ii<0||ii>=GW||jj<0||jj>=GH) break;
+        const t=(Zm[jj*GW+ii]-z0)/r[q+2];
+        if(t>up)up=t; else if(t<dn)dn=t;
+      }
+      const gamma=Math.atan(up), delta=Math.atan(dn);
+      sSvf += 1-Math.sin(gamma);
+      sOpn += (HALFPI-gamma)-(HALFPI+delta);    // PO - NO, i.e. -(gamma+delta)
+    }
+    SVF[d]=sSvf/HDIRS;
+    OPN[d]=sOpn/HDIRS;                          // radians; >0 convex, <0 concave
+  }
+}
+function needHorizon(){ if(!SVF) horizonScan(); }
+
 const ix=d=>d%GW, jx=d=>(d/GW)|0;
 const wx=i=>-SPANX+i*CELL, wz=j=>-SPANZ+j*CELL;
 const areaM2=()=>((GW-1)*CELL)*((GH-1)*CELL);
@@ -630,7 +743,7 @@ const rn=new THREE.WebGLRenderer({canvas,antialias:false});
 const scene=new THREE.Scene(), overlay=new THREE.Scene();
 const cam=new THREE.PerspectiveCamera(46,1,.5,4000);
 const bigIndex = rn.capabilities.isWebGL2 || !!rn.extensions.get('OES_element_index_uint');
-const MAXG = bigIndex ? 384 : 255;
+const MAXG = bigIndex ? 512 : 255;
 
 const geo=new THREE.BufferGeometry();
 geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
@@ -679,17 +792,37 @@ const surfMat=new THREE.ShaderMaterial({
   side:THREE.DoubleSide,
   uniforms:{uH:{value:null},uLrm:{value:null},uTexel:{value:new THREE.Vector2(1/160,1/160)},uCell:{value:1},uRange:{value:1},
     uVex:{value:1},uSun:{value:new THREE.Vector3(0,1,0)},uShade:{value:0},
-    uLut:{value:null},uBands:{value:0},uClip:{value:new THREE.Vector2(0,1)},uHasLrm:{value:0}},
+    uLut:{value:null},uBands:{value:0},uClip:{value:new THREE.Vector2(0,1)},uHasLrm:{value:0},
+    uAux:{value:null},uHasAux:{value:0}},
   vertexShader:'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
   fragmentShader:[
     'precision highp float;',
-    'uniform sampler2D uH,uLut,uLrm;',
+    'uniform sampler2D uH,uLut,uLrm,uAux;',
     'uniform vec2 uTexel;',
-    'uniform float uCell,uRange,uVex,uShade,uBands,uHasLrm;',
+    'uniform float uCell,uRange,uVex,uShade,uBands,uHasLrm,uHasAux;',
     'uniform vec3 uSun; uniform vec2 uClip;',
     'varying vec2 vUv;',
     'float dec(vec4 t){ return (t.r*255.0*256.0 + t.g*255.0)/65535.0; }',
-    'float H(vec2 uv){ return dec(texture2D(uH,clamp(uv,0.0,1.0))); }',
+    'float Hraw(vec2 uv){ return dec(texture2D(uH,clamp(uv,0.0,1.0))); }',
+    // Smooth reconstruction of the height field, done by hand.
+    //
+    // The texture must stay NearestFilter: it packs 16 bits across R and G, and
+    // hardware filtering would blend the high and low bytes independently and
+    // produce garbage. So decode the four surrounding texels first, then mix.
+    //
+    // The weights are smoothstep rather than linear. Plain bilinear is only C0,
+    // so its derivative jumps at every texel edge and the normal - which is a
+    // central difference of this function - shows a diamond lattice. Smoothstep
+    // is C1, which makes the shading continuous across cell boundaries.
+    'float H(vec2 uv){',
+    '  vec2 t = uv/uTexel - 0.5;',
+    '  vec2 f = fract(t);',
+    '  vec2 b = (floor(t)+0.5)*uTexel;',
+    '  vec2 w = f*f*(3.0-2.0*f);',
+    '  float h00=Hraw(b),                      h10=Hraw(b+vec2(uTexel.x,0.0));',
+    '  float h01=Hraw(b+vec2(0.0,uTexel.y)),   h11=Hraw(b+uTexel);',
+    '  return mix(mix(h00,h10,w.x), mix(h01,h11,w.x), w.y);',
+    '}',
     'void main(){',
     '  float h = H(vUv);',
     '  if(h < uClip.x || h > uClip.y) discard;',
@@ -704,8 +837,12 @@ const surfMat=new THREE.ShaderMaterial({
     '    col = texture2D(uLut, vec2(clamp(t,0.0,1.0),0.5)).rgb * (0.30+0.70*sh); }',
     '  else if(uShade < 2.5){ float s=clamp(acos(clamp(n.y,-1.0,1.0))/1.2,0.0,1.0);',
     '    col = texture2D(uLut, vec2(s,0.5)).rgb * (0.55+0.45*sh); }',
-    '  else { float r = uHasLrm>0.5 ? dec(texture2D(uLrm,clamp(vUv,0.0,1.0))) : 0.5;',
+    '  else if(uShade < 3.5){ float r = uHasLrm>0.5 ? dec(texture2D(uLrm,clamp(vUv,0.0,1.0))) : 0.5;',
     '    col = texture2D(uLut, vec2(clamp(r,0.0,1.0),0.5)).rgb * (0.55+0.45*sh); }',
+    // Sky-view factor and openness are deliberately unlit. Modulating them by a
+    // hillshade would reintroduce exactly the directional bias they remove.
+    '  else { float a = uHasAux>0.5 ? dec(texture2D(uAux,clamp(vUv,0.0,1.0))) : 0.5;',
+    '    col = texture2D(uLut, vec2(clamp(a,0.0,1.0),0.5)).rgb; }',
     '  gl_FragColor = vec4(col,1.0);',
     '}'].join('\n')
 });
@@ -798,6 +935,9 @@ function installDEM(dem){
 
   if(hTex)hTex.dispose(); hTex=packTex(Hn,0,1,GW,GH);
   if(lrmTex){lrmTex.dispose();lrmTex=null;} surfMat.uniforms.uHasLrm.value=0;
+  if(svfTex){svfTex.dispose();svfTex=null;}
+  if(opnTex){opnTex.dispose();opnTex=null;}
+  SVF=null; OPN=null; surfMat.uniforms.uHasAux.value=0; surfMat.uniforms.uAux.value=null;
   surfMat.uniforms.uH.value=hTex;
   surfMat.uniforms.uTexel.value.set(1/GW,1/GH);
   surfMat.uniforms.uCell.value=CELL;
@@ -944,8 +1084,28 @@ function analyse(cells,LRM,broad,sign,scaleName){
   }
   const ditch=ringN>=8&&ring/ringN>=0.5;
   const ringForm=peak>0.3&&sign*LRM[cd]<0.42*peak;
+
+  /* Illumination-independent confirmation. A genuine mound reads convex in
+     openness and open in sky-view relative to the ground around it; a ditch
+     reads the reverse. Multiplying by `sign` makes a positive contrast mean
+     "shaped the way this candidate claims to be" for both. */
+  let oIn=0,sIn=0;
+  for(const d of cells){oIn+=OPN[d];sIn+=SVF[d];}
+  oIn/=n; sIn/=n;
+  let oOut=0,sOut=0,rN=0;
+  const rr=Math.max(2,(rMean>0?rMean:length/2)*1.9/CELL);
+  for(let a=0;a<16;a++){
+    const th=a*Math.PI/8;
+    const ii=Math.round(ci+Math.cos(th)*rr),jj=Math.round(cj+Math.sin(th)*rr);
+    if(ii<0||ii>=GW||jj<0||jj>=GH)continue;
+    const e=jj*GW+ii; oOut+=OPN[e]; sOut+=SVF[e]; rN++;
+  }
+  const openContrast = rN? sign*(oIn-oOut/rN) : 0;   // radians
+  const svfContrast  = rN? sign*(sIn-sOut/rN) : 0;   // 0..1
+
   return {ci,cj,area,length,width,circ,elong,sym,flat,sharp,dirs,relief:peak,
     orient,broadSlope,alignedDownslope,ditch,ringForm,sign,scaleName,
+    openContrast,svfContrast,
     x:wx(ci),z:wz(cj)};
 }
 function classify(f){
@@ -962,28 +1122,38 @@ function classify(f){
   return 'Uncertain Terrain Anomaly';
 }
 /* Weights are calibrated so a candidate must earn High (>=70), not inherit it.
-   The previous version handed every candidate a constant 56 (base 28 + a
+   An earlier version handed every candidate a constant 56 (base 28 + a
    hillshade term that scored 16/16 for essentially any relief + a clustering
-   bonus of 12), which put 100% of hits in the High band. Only a feature that is
-   circular, symmetric, well-defined, high-relief AND persistent across scales
-   now reaches High. */
+   bonus of 12), which put 100% of hits in the High band.
+
+   Hillshade persistence is deliberately worth little: `dirs` comes back 8/8 for
+   almost any relief, so it barely discriminates. The illumination-independent
+   pair — openness and sky-view contrast against the surrounding ground — now
+   carries that weight instead, which is what "detectable across multiple
+   representations" is supposed to mean. Openness saturates at 5deg of contrast
+   and sky-view at 0.06, both near the top of the observed range. */
 function score(f){
   let s=6;const up=[],down=[];
   const add=(v,max,l)=>{if(v>=max*0.55)up.push(l);s+=v;};
-  add(f.circ*18,18,'high circularity');
-  add(f.sym*12,12,'radial symmetry');
-  add(Math.min(f.relief/1.2,1)*14,14,'strong local relief');
-  add(f.flat*7,7,'flattened summit');
-  add(f.sharp*7,7,'defined base break');
-  add(Math.pow(f.dirs/8,3)*8,8,'visible under '+f.dirs+' of 8 hillshade directions');
-  if(f.scales>1){s+=Math.min(14,(f.scales-1)*7);up.push('persists across '+f.scales+' analysis scales');}
-  if(f.ditch){s+=8;up.push('surrounding depression');}
-  if(f.cluster>=2){s+=Math.min(6,f.cluster*1.5);up.push('clustered with '+f.cluster+' similar features');}
+  const sat=(v,at)=>Math.max(0,Math.min(1,v/at));
+  add(f.circ*16,16,'high circularity');
+  add(f.sym*11,11,'radial symmetry');
+  add(Math.min(f.relief/1.2,1)*13,13,'strong local relief');
+  add(f.flat*6,6,'flattened summit');
+  add(f.sharp*6,6,'defined base break');
+  add(Math.pow(f.dirs/8,3)*4,4,'visible under '+f.dirs+' of 8 hillshade directions');
+  add(sat(f.openContrast,0.087)*10,10,
+      (f.sign>0?'convex':'concave')+' form confirmed by openness, independent of illumination');
+  add(sat(f.svfContrast,0.06)*7,7,'sky-view factor separates it from surrounding ground');
+  if(f.scales>1){s+=Math.min(12,(f.scales-1)*6);up.push('persists across '+f.scales+' analysis scales');}
+  if(f.ditch){s+=7;up.push('surrounding depression');}
+  if(f.cluster>=2){s+=Math.min(5,f.cluster*1.5);up.push('clustered with '+f.cluster+' similar features');}
   if(f.alignedDownslope){s-=24;down.push('long axis follows local downslope');}
   if(f.broadSlope>0.21){s-=14;down.push('sits on steep natural terrain');}
   if(f.relief<0.4){s-=10;down.push('weak elevation difference');}
   if(f.elong>5&&f.sym<0.4){s-=14;down.push('long straight form — possible road, levee or field boundary');}
   if(f.dirs<=2){s-=12;down.push('visible from few illumination directions');}
+  if(f.openContrast<0){s-=12;down.push('openness does not confirm the '+(f.sign>0?'convex':'concave')+' form');}
   f.up=up;f.down=down;
   return Math.max(5,Math.min(96,Math.round(s)));
 }
@@ -995,6 +1165,7 @@ function altFor(f){
   return 'Could be natural microtopography or a modern ground disturbance.';
 }
 function runScan(){
+  needHorizon();
   const found=[];
   const broad=blur(Zm,Math.max(3,36/CELL),3);
   const T=GW*GH;
@@ -1076,6 +1247,41 @@ function parseASC(text){
   fillHoles(vals,nc,nr);
   return {vals,gw:nc,gh:nr,cell,name:'ASCII grid',note:nc+' × '+nr+' cells'};
 }
+/* Linear units of a projected GeoTIFF.
+
+   USGS OPR tiles for Oklahoma come as State Plane feet — e.g. "NAD83(2011) /
+   Oklahoma South (ftUS) + NAVD88 height (ftUS)" — and carry no
+   ProjLinearUnitsGeoKey at all, because the unit is implied by the EPSG code.
+   Reading those as metres inflates every distance and elevation by 3.28x and
+   silently pushes the scan's metre-based thresholds out of range, so fall back
+   to the citation strings when the explicit key is missing.
+
+   Vertical units are tracked separately: NAVD88 height in feet on a State Plane
+   foot grid is normal, but so is a metre grid with foot elevations. */
+const LINUNIT={9001:1, 9002:0.3048, 9003:1200/3937};
+function tiffUnits(kk){
+  let hf=null, vf=null, src='assumed metres';
+  if(kk){
+    if(LINUNIT[kk.ProjLinearUnitsGeoKey]) hf=LINUNIT[kk.ProjLinearUnitsGeoKey];
+    if(LINUNIT[kk.VerticalUnitsGeoKey])   vf=LINUNIT[kk.VerticalUnitsGeoKey];
+    if(hf!==null) src='unit geokey';
+    if(hf===null||vf===null){
+      const cite=[kk.GTCitationGeoKey,kk.PCSCitationGeoKey,kk.VerticalCitationGeoKey]
+        .filter(x=>typeof x==='string').join(' | ');
+      if(cite){
+        const us=/ftus|us\s*survey\s*(foot|feet|ft)/i.test(cite);
+        if(us||/\(\s*ft\s*\)|\bfeet\b|\bfoot\b/i.test(cite)){
+          const f=us?1200/3937:0.3048;
+          if(hf===null){hf=f;src='CRS citation';}
+          if(vf===null) vf=f;
+        }
+      }
+    }
+  }
+  if(hf===null) hf=1;
+  if(vf===null) vf=hf;
+  return {hf,vf,src,name:hf===1?'m':(Math.abs(hf-0.3048)<1e-6?'ft':'ftUS')};
+}
 async function parseTIFF(file){
   if(!window.GeoTIFF){
     await loadScript([
@@ -1092,30 +1298,34 @@ async function parseTIFF(file){
   const band=rasters[0];
   let nod=null;
   try{ const gd=img.getGDALNoData&&img.getGDALNoData(); if(gd!==null&&gd!==undefined) nod=gd; }catch(e){}
-  // cell size in metres
-  let cell=1;
+  // cell size and elevations, both converted to metres
+  let cell=1, vf=1, unote='';
   try{
     const bb=img.getBoundingBox();
     const dx=Math.abs(bb[2]-bb[0])/w, dy=Math.abs(bb[3]-bb[1])/h;
     const geographic = Math.abs(bb[0])<=180 && Math.abs(bb[2])<=180 && Math.abs(bb[1])<=90 && Math.abs(bb[3])<=90;
+    let kk=null; try{ kk=img.getGeoKeys&&img.getGeoKeys(); }catch(e){}
+    const u=tiffUnits(kk);
     if(geographic){
       const lat=(bb[1]+bb[3])/2;
       cell=(dx*111320*Math.cos(lat*Math.PI/180) + dy*110540)/2;
+      vf=u.vf; unote='geographic, '+(vf===1?'metre':'foot')+' elevations';
     } else {
-      let f=1;
-      try{ const kk=img.getGeoKeys&&img.getGeoKeys();
-        if(kk&&(kk.ProjLinearUnitsGeoKey===9002||kk.ProjLinearUnitsGeoKey===9003)) f=0.3048; }catch(e){}
-      cell=((dx+dy)/2)*f;
+      cell=((dx+dy)/2)*u.hf;
+      vf=u.vf;
+      unote=u.name+' grid ('+u.src+')';
     }
   }catch(e){}
   if(!isFinite(cell)||cell<=0) cell=1;
+  if(!isFinite(vf)||vf<=0) vf=1;
   const vals=new Float32Array(w*h).fill(Infinity);
   for(let j=0;j<h;j++)for(let i=0;i<w;i++){
     const v=band[j*w+i];
-    vals[j*w+i]=(!isFinite(v)||(nod!==null&&v===nod)||v<-1e5||v>1e6)?Infinity:v;
+    vals[j*w+i]=(!isFinite(v)||(nod!==null&&v===nod)||v<-1e5||v>1e6)?Infinity:v*vf;
   }
   fillHoles(vals,w,h);
-  return {vals,gw:w,gh:h,cell,name:file.name.replace(/\.[^.]+$/,''),note:w+' × '+h+' raster'};
+  return {vals,gw:w,gh:h,cell,name:file.name.replace(/\.[^.]+$/,''),
+    note:w+' × '+h+' raster'+(unote?' · '+unote:'')};
 }
 
 /* ══ display plumbing ══ */
@@ -1182,6 +1392,8 @@ function paintLegend(){
   }
   const L=LUTS[pal][theme],n=bands>1?Math.min(bands,34):34;
   for(let i=0;i<n;i++){const b=document.createElement('i');b.style.background=css(lutAt(L,bands>1?(i+.5)/n:i/(n-1)));el.appendChild(b);}
+  if(mode!=='points'&&sh===5){$('#lo').textContent='Concave';$('#hi').textContent='Convex';return;}
+  if(mode!=='points'&&sh===4){$('#lo').textContent='Enclosed';$('#hi').textContent='Open sky';return;}
   if(mode!=='points'&&sh===3){$('#lo').textContent='Cut';$('#hi').textContent='Fill';return;}
   if(mode!=='points'&&sh===2){$('#lo').textContent='Flat';$('#hi').textContent='Steep';return;}
   if(mode!=='points'&&attr!=='intens'){
@@ -1196,7 +1408,7 @@ function paintLegend(){
 function paintSwatches(){CSETS[PAL[pal].cls][theme].forEach((h,i)=>{$('#sw'+i).style.background=h;});}
 function hud(){
   $('#capsub').textContent=mode==='points'?'Point cloud':mode==='surface'?'Bare earth':'Points + surface';
-  const shd=['Hillshade','Tinted relief','Slope','Local relief'][surfMat.uniforms.uShade.value];
+  const shd=['Hillshade','Tinted relief','Slope','Local relief','Sky-view factor','Openness'][surfMat.uniforms.uShade.value];
   $('#cap').textContent=mode==='points'
     ?(sep<.02?(vex>1.05?'Exaggerated':'Composite'):(sepBy==='class'?'Class split':'Elevation split')):shd;
   $('#spine').textContent=mode==='points'?'Point cloud':'Bare earth DEM · '+GW+' × '+GH;
@@ -1239,7 +1451,7 @@ function resize(){
   const w=innerWidth,h=innerHeight,d=Math.min(devicePixelRatio||1,2);
   rn.setPixelRatio(d);rn.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix();makeRT();
 }
-addEventListener('resize',resize);
+addEventListener('resize',()=>{resize();applyMode();});
 
 const P=new Map();let pinch=0;
 canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);P.set(e.pointerId,{x:e.clientX,y:e.clientY});auto=false;idle=0;tPitch=tDist=null;});
@@ -1257,21 +1469,48 @@ canvas.addEventListener('wheel',e=>{e.preventDefault();dist=Math.max(SPAN*.12,Ma
 /* ══ sheets ══ */
 const sheet=$('#sheet'),toggle=$('#toggle');
 const SNAP=()=>[innerHeight*0.33,innerHeight*0.62,innerHeight*0.88];
-let sheetH=0,isOpen=false;
+const DESK=matchMedia('(min-width:900px)');
+const RAILMIN=280,RAILMAX=560;
+let sheetH=0,isOpen=false,railW=360,desk=DESK.matches;
+const root=document.documentElement;
+
 function setSheetH(px){sheetH=px;sheet.style.height=px+'px';
-  document.documentElement.style.setProperty('--sheet',px+'px');}
+  root.style.setProperty('--sheet',px+'px');}
+function setRailW(px){railW=Math.max(RAILMIN,Math.min(RAILMAX,px));
+  root.style.setProperty('--rail',railW+'px');}
+/* The rail overlays the left edge, so push the plate readouts clear of it. */
+function syncPlate(){
+  root.style.setProperty('--plateL',(desk&&isOpen)?(railW+24)+'px':'16px');
+}
+/* One open/close state drives both layouts; only the axis differs. */
+function applyMode(){
+  desk=DESK.matches;
+  $('#handlelab').textContent=desk?'Controls — drag edge to resize':'Controls — drag to resize';
+  $('#handle').style.cursor=desk?'default':'ns-resize';
+  if(desk){ sheet.style.height=''; root.style.setProperty('--sheet','0px'); setRailW(railW); }
+  else { root.style.setProperty('--sheet',isOpen?sheetH+'px':'0px');
+         if(isOpen) setSheetH(sheetH||SNAP()[0]); }
+  syncPlate();
+}
 function openSheet(){isOpen=true;document.body.classList.add('sheet-open');
-  toggle.setAttribute('aria-expanded','true');sheet.classList.add('snapping');setSheetH(SNAP()[0]);}
+  toggle.setAttribute('aria-expanded','true');sheet.classList.add('snapping');
+  if(!desk) setSheetH(SNAP()[0]);
+  syncPlate();}
 function closeSheet(){isOpen=false;document.body.classList.remove('sheet-open');
   toggle.setAttribute('aria-expanded','false');sheet.classList.add('snapping');
-  document.documentElement.style.setProperty('--sheet','0px');}
+  root.style.setProperty('--sheet','0px');
+  syncPlate();}
 toggle.onclick=()=>{isOpen?closeSheet():openSheet();};
 addEventListener('keydown',e=>{if(e.key==='Escape'){closeDetail();closeSheet();}});
+DESK.addEventListener?DESK.addEventListener('change',applyMode):DESK.addListener(applyMode);
+
+/* vertical drag — phone bottom sheet only */
 (function(){
   const h=$('#handle');let y0=null,h0=0,moved=false;
-  h.addEventListener('pointerdown',e=>{y0=e.clientY;h0=sheet.getBoundingClientRect().height;moved=false;
+  h.addEventListener('pointerdown',e=>{if(desk)return;
+    y0=e.clientY;h0=sheet.getBoundingClientRect().height;moved=false;
     sheet.classList.remove('snapping');h.setPointerCapture(e.pointerId);});
-  h.addEventListener('pointermove',e=>{if(y0===null)return;
+  h.addEventListener('pointermove',e=>{if(y0===null||desk)return;
     const d=y0-e.clientY;if(Math.abs(d)>3)moved=true;
     setSheetH(Math.max(0,Math.min(innerHeight*0.92,h0+d)));});
   const end=()=>{if(y0===null)return;y0=null;if(!moved)return;
@@ -1280,6 +1519,18 @@ addEventListener('keydown',e=>{if(e.key==='Escape'){closeDetail();closeSheet();}
     let best=SNAP()[0];SNAP().forEach(s=>{if(Math.abs(s-sheetH)<Math.abs(best-sheetH))best=s;});
     setSheetH(best);};
   h.addEventListener('pointerup',end);h.addEventListener('pointercancel',end);
+})();
+
+/* horizontal drag — desktop rail only */
+(function(){
+  const g=$('#grip');let x0=null,w0=0;
+  g.addEventListener('pointerdown',e=>{if(!desk)return;
+    x0=e.clientX;w0=railW;sheet.classList.remove('snapping');
+    g.setPointerCapture(e.pointerId);e.preventDefault();});
+  g.addEventListener('pointermove',e=>{if(x0===null||!desk)return;
+    setRailW(w0+(e.clientX-x0));syncPlate();});
+  const end=()=>{if(x0===null)return;x0=null;sheet.classList.add('snapping');};
+  g.addEventListener('pointerup',end);g.addEventListener('pointercancel',end);
 })();
 
 /* ══ scan UI ══ */
@@ -1291,8 +1542,10 @@ async function doScan(){
   $('#scanbtn').disabled=true;$('#scantitle').textContent='Scanning Terrain…';
   document.body.classList.add('scanning');closeDetail();$('#bar').style.width='0%';
   await stg('Reading bare-earth model',8);
-  await stg('Computing local relief at three scales',30);
-  await stg('Testing eight illumination directions',52);
+  await stg('Computing sky-view factor and openness',22);
+  try{needHorizon();}catch(e){}
+  await stg('Computing local relief at three scales',44);
+  await stg('Testing eight illumination directions',56);
   let res=[];try{res=runScan();}catch(e){res=[];}
   await stg('Measuring shape and symmetry',72);
   await stg('Rejecting natural and modern forms',88);
@@ -1425,8 +1678,7 @@ segBind('#theme',b=>setTheme(b.dataset.t));
 segBind('#attr',b=>{attr=b.dataset.a;recolor();});
 segBind('#sepby',b=>{sepBy=b.dataset.s;assignBands();hud();});
 segBind('#mode',b=>{mode=b.dataset.m;paintLegend();hud();});
-segBind('#shade',b=>{
-  const v=+b.dataset.s;
+function buildShadeTex(v){
   if(v===3&&!lrmTex){
     const T=GW*GH,sm=blur(Zm,Math.max(2,15/CELL),3),L=new Float32Array(T);
     let lo=1e9,hi=-1e9;
@@ -1434,6 +1686,25 @@ segBind('#shade',b=>{
     const m=Math.max(Math.abs(lo),Math.abs(hi))||1;
     lrmTex=packTex(L,-m,m,GW,GH);surfMat.uniforms.uLrm.value=lrmTex;surfMat.uniforms.uHasLrm.value=1;
   }
+  if(v===4||v===5){
+    needHorizon();
+    if(v===4&&!svfTex){
+      const [lo,hi]=pctRange(SVF,0.02,0.98);
+      svfTex=packTex(SVF,lo,hi,GW,GH);
+    }
+    if(v===5&&!opnTex){
+      // symmetric about zero so mid-ramp reads as genuinely flat ground
+      const [lo,hi]=pctRange(OPN,0.02,0.98);
+      const m=Math.max(Math.abs(lo),Math.abs(hi))||1;
+      opnTex=packTex(OPN,-m,m,GW,GH);
+    }
+    surfMat.uniforms.uAux.value = v===4?svfTex:opnTex;
+    surfMat.uniforms.uHasAux.value = 1;
+  }
+}
+segBind('#shade',b=>{
+  const v=+b.dataset.s;
+  buildShadeTex(v);
   surfMat.uniforms.uShade.value=v;
   if(mode==='points'){mode='surface';segSet('#mode','surface','m');}
   paintLegend();hud();
@@ -1543,6 +1814,7 @@ function tick(now){
 }
 resize();makeLutTex();installDEM(demoDEM());assignBands();setTheme('dark');recolor(true);updateSun();
 setSheetH(innerHeight*0.33);document.documentElement.style.setProperty('--sheet','0px');
+applyMode();
 place();requestAnimationFrame(tick);
 })();
 </script>
