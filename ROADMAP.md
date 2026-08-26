@@ -107,23 +107,25 @@ no upload.
   darkened by slope; the Relief Visualization Toolbox archaeological default,
   and greyscale, so it suits the house style. Gamma 1.35 is a tunable.
 
-Still worth taking from `nico579/lidar2map`, which covers the same ground in
-Python:
+- ~~**MSTP**~~ — done. `DEV(σ) = (z − mean_σ)/std_σ` over three scale bands into
+  R/G/B, clipped at ±2.2σ. Colour encodes the dominant scale of a structure, so
+  a mound reads green-cyan against blue terraces.
+- ~~**RRIM**~~ — done. Redness from slope, lightness from differential openness.
+  Free, in the sense that both inputs already existed.
 
-- **MSTP** (multi-scale topographic position) — `DEV(σ) = (z − mean_σ)/std_σ`
-  over three scale bands into R/G/B, so colour encodes the dominant scale of a
-  structure. Genuinely useful, but inherently a colour product, which the
-  black-and-white house style rules out unless that rule bends for data.
-- **RRIM** (red relief image map) — slope × openness difference. Same problem:
-  the technique is named for its use of red.
-- A **line-sweep horizon kernel** instead of per-cell ray marching. `runScan`
-  is the bottleneck, not `horizonScan`, so this is not urgent.
+Still worth taking from `nico579/lidar2map`: a **line-sweep horizon kernel**
+instead of per-cell ray marching. `runScan` is the bottleneck rather than
+`horizonScan`, so this is not urgent.
 
-Still open: move `horizonScan` and `runScan` into a **Web Worker** with progress
-messages. On a real 500² tile they cost ~590 ms and ~4 s respectively, both
-blocking behind the progress overlay, and the staged progress UI is still timed
-rather than event-driven. `runScan` is the bottleneck — profile `components`,
-`analyse` and the 8-azimuth `dirs` loop before optimising anything else.
+~~Move `horizonScan` and `runScan` into a **Web Worker** with progress
+messages.~~ Done. Everything expensive — gradients, blur, horizon products,
+local relief, MSTP and the feature scan — runs in a Blob worker built by
+stringifying `scanWorkerBody`, so there is still one file and one copy of the
+analysis. Progress is driven by worker events rather than a timer. On a real
+500² tile the longest main-thread stall during a scan fell from 718 ms to
+59 ms, matching idle, and wall time went 4.5 s to 2.8 s.
+
+**Phase 4 is complete.**
 
 ---
 
