@@ -448,7 +448,7 @@
       </div>
     </div>
 
-    <div class="mark"><span>v0.9.1</span><b>Klinekraft</b></div>
+    <div class="mark"><span>v1.0</span><b>Klinekraft</b></div>
   </div>
 </section>
 
@@ -568,7 +568,7 @@ for(let i=0;i<N;i++)pElev[i]=(pos[i*3+1]-pMin)/pRange;
 
 /* ══ mutable terrain grid ══ */
 let GW=0, GH=0, CELL=1, SPAN=1, SPANX=1, SPANZ=1;
-let Zm=null, Hn=null, gx=null, gz=null, slope=null;
+let Zm=null, Hn=null;
 let zMin=0, zMax=1, zRange=1, hTex=null, lrmTex=null, hasPoints=true;
 let SVF=null, OPN=null, POS=null;                   // horizon products, built on demand
 let svfTex=null, opnTex=null, posTex=null, mstpTex=null;
@@ -659,41 +659,7 @@ function pctRange(arr,loQ,hiQ){
    Scales are in metres, not cells, so a tile's resolution does not change what
    the bands mean. mean and stdev both come from the sliding-window blur:
    var = E[z^2] - E[z]^2. */
-const MSTPBANDS=[[1.5,5],[12,27],[55,100]], MSTPK=2.2;
-function buildMSTP(){
-  const T=GW*GH, sq=new Float32Array(T);
-  for(let d=0;d<T;d++) sq[d]=Zm[d]*Zm[d];
-  const band=[];
-  for(const pair of MSTPBANDS){
-    const acc=new Float32Array(T);
-    for(const sM of pair){
-      const r=Math.max(1,sM/CELL);
-      const mean=blur(Zm,r,3), meanSq=blur(sq,r,3);
-      for(let d=0;d<T;d++){
-        const v=meanSq[d]-mean[d]*mean[d];
-        const sd=v>1e-9?Math.sqrt(v):0;
-        acc[d]+= sd>1e-6 ? (Zm[d]-mean[d])/sd : 0;
-      }
-    }
-    for(let d=0;d<T;d++) acc[d]/=pair.length;
-    band.push(acc);
-  }
-  // symmetric clip at +/-k standard deviations, then a mild lift
-  const out=new Uint8Array(T*4);
-  for(let d=0;d<T;d++){
-    for(let c=0;c<3;c++){
-      let v=(band[c][d]/MSTPK+1)*0.5;
-      v=Math.pow(Math.max(0,Math.min(1,v)),0.85);
-      out[d*4+c]=v*255;
-    }
-    out[d*4+3]=255;
-  }
-  const t=new THREE.DataTexture(out,GW,GH,THREE.RGBAFormat);
-  // three independent 8-bit channels, so hardware filtering is safe here
-  t.minFilter=t.magFilter=THREE.LinearFilter;
-  t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.needsUpdate=true;
-  return t;
-}
+
 
 function packTex(arr,lo,hi,gw,gh){
   const d=new Uint8Array(gw*gh*4);
@@ -707,33 +673,7 @@ function packTex(arr,lo,hi,gw,gh){
 }
 
 /* sliding-window box blur — O(GW·GH) regardless of radius */
-function blur(src,r,passes){
-  r=Math.max(1,Math.min(Math.max(GW,GH)-1,Math.round(r)));
-  const cx=i=>Math.max(0,Math.min(GW-1,i)), cy=j=>Math.max(0,Math.min(GH-1,j));
-  let a=Float32Array.from(src), b=new Float32Array(GW*GH);
-  const w=2*r+1;
-  for(let p=0;p<passes;p++){
-    for(let j=0;j<GH;j++){
-      const o=j*GW; let sum=0;
-      for(let i=-r;i<=r;i++) sum+=a[o+cx(i)];
-      for(let i=0;i<GW;i++){
-        b[o+i]=sum/w;
-        sum-=a[o+cx(i-r)];
-        sum+=a[o+cx(i+r+1)];
-      }
-    }
-    for(let i=0;i<GW;i++){
-      let sum=0;
-      for(let j=-r;j<=r;j++) sum+=b[cy(j)*GW+i];
-      for(let j=0;j<GH;j++){
-        a[j*GW+i]=sum/w;
-        sum-=b[cy(j-r)*GW+i];
-        sum+=b[cy(j+r+1)*GW+i];
-      }
-    }
-  }
-  return a;
-}
+
 
 /* Horizon scan — the illumination-independent half of the analysis.
 
@@ -752,55 +692,9 @@ function blur(src,r,passes){
 
    Ray offsets are identical for every cell, so they are precomputed once and
    the inner loop is a bounds test plus a divide. */
-const HDIRS=16, HRADIUS=28;
-function horizonScan(){
-  const T=GW*GH, R=Math.max(2,Math.round(HRADIUS/CELL));
-  SVF=new Float32Array(T); OPN=new Float32Array(T); POS=new Float32Array(T);
-  const rays=[];
-  for(let k=0;k<HDIRS;k++){
-    const th=k*2*Math.PI/HDIRS, cx=Math.cos(th), cz=Math.sin(th), steps=[];
-    let li=0,lj=0;
-    for(let sp=1;sp<=R;sp=Math.max(sp+1,Math.round(sp*1.35))){
-      const di=Math.round(cx*sp), dj=Math.round(cz*sp);
-      if(di===li&&dj===lj) continue;            // same cell as last step
-      li=di; lj=dj;
-      steps.push(di,dj,Math.hypot(di,dj)*CELL);
-    }
-    rays.push(new Float64Array(steps));
-  }
-  const HALFPI=Math.PI/2;
-  for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
-    const d=j*GW+i, z0=Zm[d];
-    let sSvf=0, sOpn=0, sPos=0;
-    for(let k=0;k<HDIRS;k++){
-      const r=rays[k]; let up=-1e30, dn=1e30, seen=false;
-      for(let q=0;q<r.length;q+=3){
-        const ii=i+r[q], jj=j+r[q+1];
-        if(ii<0||ii>=GW||jj<0||jj>=GH) break;
-        const t=(Zm[jj*GW+ii]-z0)/r[q+2];
-        if(t>up)up=t;
-        if(t<dn)dn=t;
-        seen=true;
-      }
-      if(!seen){up=0;dn=0;}
-      // Left unclamped on purpose. On a convex summit every ray looks
-      // downwards, so the horizon angle is negative and openness exceeds 90deg
-      // — clamping it at a flat horizon would collapse precisely the features
-      // this is meant to separate. Sky-view does clamp, because the sky cannot
-      // be more than fully open.
-      const gamma=Math.atan(up), delta=Math.atan(dn);
-      sSvf += 1-Math.sin(Math.max(0,gamma));
-      sPos += HALFPI-gamma;                     // positive openness
-      sOpn += (HALFPI-gamma)-(HALFPI+delta);    // PO - NO, i.e. -(gamma+delta)
-    }
-    SVF[d]=sSvf/HDIRS;
-    POS[d]=sPos/HDIRS;                          // radians
-    OPN[d]=sOpn/HDIRS;                          // radians; >0 convex, <0 concave
-  }
-}
-function needHorizon(){ if(!SVF) horizonScan(); }
 
-const ix=d=>d%GW, jx=d=>(d/GW)|0;
+
+
 const wx=i=>-SPANX+i*CELL, wz=j=>-SPANZ+j*CELL;
 const areaM2=()=>((GW-1)*CELL)*((GH-1)*CELL);
 
@@ -1042,13 +936,7 @@ function installDEM(dem){
   zMin=lo; zMax=hi; zRange=Math.max(1e-3,hi-lo);
   for(let d=0;d<T;d++){Zm[d]=vals[d]-lo; Hn[d]=Zm[d]/zRange;}
 
-  gx=new Float32Array(T);gz=new Float32Array(T);slope=new Float32Array(T);
-  for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
-    const iL=Math.max(0,i-1),iR=Math.min(GW-1,i+1),jD=Math.max(0,j-1),jU=Math.min(GH-1,j+1);
-    const dx=(Zm[j*GW+iR]-Zm[j*GW+iL])/((iR-iL)*CELL);
-    const dz=(Zm[jU*GW+i]-Zm[jD*GW+i])/((jU-jD)*CELL);
-    gx[j*GW+i]=dx;gz[j*GW+i]=dz;slope[j*GW+i]=Math.atan(Math.hypot(dx,dz));
-  }
+  wpost({cmd:'dem',Zm:Zm.slice().buffer,GW,GH,CELL});
 
   if(hTex)hTex.dispose(); hTex=packTex(Hn,0,1,GW,GH);
   if(lrmTex){lrmTex.dispose();lrmTex=null;} surfMat.uniforms.uHasLrm.value=0;
@@ -1112,11 +1000,133 @@ function updateStats(){
 }
 
 /* ══ scan ══ */
+
+
+
+
+/* Weights are calibrated so a candidate must earn High (>=70), not inherit it.
+   An earlier version handed every candidate a constant 56 (base 28 + a
+   hillshade term that scored 16/16 for essentially any relief + a clustering
+   bonus of 12), which put 100% of hits in the High band.
+
+   Hillshade persistence is deliberately worth little: `dirs` comes back 8/8 for
+   almost any relief, so it barely discriminates. The illumination-independent
+   pair — openness and sky-view contrast against the surrounding ground — now
+   carries that weight instead, which is what "detectable across multiple
+   representations" is supposed to mean. Openness saturates at 5deg of contrast
+   and sky-view at 0.06, both near the top of the observed range. */
+
+
+
+
+
+/* ══ analysis worker ══
+
+   Everything expensive runs off the main thread: gradients, the horizon scan,
+   local relief, MSTP, and the feature scan itself. This function is never
+   called here — it is stringified into a Blob and becomes the worker, so the
+   analysis exists in exactly one place rather than being duplicated.
+
+   The worker owns Zm and derives the rest, so the main thread holds only what
+   it needs to build textures and draw markers. */
+function scanWorkerBody(){
+"use strict";
+let GW=0,GH=0,CELL=1,Zm=null,gx=null,gz=null,slope=null,SVF=null,OPN=null,POS=null;
 const SCALES=[
   {name:'small', rM:5,  aLo:4,   aHi:150},
   {name:'medium',rM:15, aLo:60,  aHi:1600},
   {name:'large', rM:36, aLo:900, aHi:16000}
 ];
+const HDIRS=16, HRADIUS=28;
+const MSTPBANDS=[[1.5,5],[12,27],[55,100]], MSTPK=2.2;
+const ix=d=>d%GW, jx=d=>(d/GW)|0;
+const wx=i=>-((GW-1)*CELL/2)+i*CELL, wz=j=>-((GH-1)*CELL/2)+j*CELL;
+
+function grads(){
+  const T=GW*GH;
+  gx=new Float32Array(T);gz=new Float32Array(T);slope=new Float32Array(T);
+  for(let j=0;j<GH;j++)for(let i=0;i<GW;i++){
+    const iL=Math.max(0,i-1),iR=Math.min(GW-1,i+1),jD=Math.max(0,j-1),jU=Math.min(GH-1,j+1);
+    const dx=(Zm[j*GW+iR]-Zm[j*GW+iL])/((iR-iL)*CELL);
+    const dz=(Zm[jU*GW+i]-Zm[jD*GW+i])/((jU-jD)*CELL);
+    gx[j*GW+i]=dx;gz[j*GW+i]=dz;slope[j*GW+i]=Math.atan(Math.hypot(dx,dz));
+  }
+}
+function blur(src,r,passes){
+  r=Math.max(1,Math.min(Math.max(GW,GH)-1,Math.round(r)));
+  const cx=i=>Math.max(0,Math.min(GW-1,i)), cy=j=>Math.max(0,Math.min(GH-1,j));
+  let a=Float32Array.from(src), b=new Float32Array(GW*GH);
+  const w=2*r+1;
+  for(let p=0;p<passes;p++){
+    for(let j=0;j<GH;j++){
+      const o=j*GW; let sum=0;
+      for(let i=-r;i<=r;i++) sum+=a[o+cx(i)];
+      for(let i=0;i<GW;i++){
+        b[o+i]=sum/w;
+        sum-=a[o+cx(i-r)];
+        sum+=a[o+cx(i+r+1)];
+      }
+    }
+    for(let i=0;i<GW;i++){
+      let sum=0;
+      for(let j=-r;j<=r;j++) sum+=b[cy(j)*GW+i];
+      for(let j=0;j<GH;j++){
+        a[j*GW+i]=sum/w;
+        sum-=b[cy(j-r)*GW+i];
+        sum+=b[cy(j+r+1)*GW+i];
+      }
+    }
+  }
+  return a;
+}
+function horizonScan(prog){
+  const T=GW*GH, R=Math.max(2,Math.round(HRADIUS/CELL));
+  SVF=new Float32Array(T); OPN=new Float32Array(T); POS=new Float32Array(T);
+  const rays=[];
+  for(let k=0;k<HDIRS;k++){
+    const th=k*2*Math.PI/HDIRS, cx=Math.cos(th), cz=Math.sin(th), steps=[];
+    let li=0,lj=0;
+    for(let sp=1;sp<=R;sp=Math.max(sp+1,Math.round(sp*1.35))){
+      const di=Math.round(cx*sp), dj=Math.round(cz*sp);
+      if(di===li&&dj===lj) continue;            // same cell as last step
+      li=di; lj=dj;
+      steps.push(di,dj,Math.hypot(di,dj)*CELL);
+    }
+    rays.push(new Float64Array(steps));
+  }
+  const HALFPI=Math.PI/2;
+  for(let j=0;j<GH;j++){
+    if(prog&&(j&63)===0) prog(10+40*j/GH,"Sky-view factor and openness");
+    for(let i=0;i<GW;i++){
+    const d=j*GW+i, z0=Zm[d];
+    let sSvf=0, sOpn=0, sPos=0;
+    for(let k=0;k<HDIRS;k++){
+      const r=rays[k]; let up=-1e30, dn=1e30, seen=false;
+      for(let q=0;q<r.length;q+=3){
+        const ii=i+r[q], jj=j+r[q+1];
+        if(ii<0||ii>=GW||jj<0||jj>=GH) break;
+        const t=(Zm[jj*GW+ii]-z0)/r[q+2];
+        if(t>up)up=t;
+        if(t<dn)dn=t;
+        seen=true;
+      }
+      if(!seen){up=0;dn=0;}
+      // Left unclamped on purpose. On a convex summit every ray looks
+      // downwards, so the horizon angle is negative and openness exceeds 90deg
+      // — clamping it at a flat horizon would collapse precisely the features
+      // this is meant to separate. Sky-view does clamp, because the sky cannot
+      // be more than fully open.
+      const gamma=Math.atan(up), delta=Math.atan(dn);
+      sSvf += 1-Math.sin(Math.max(0,gamma));
+      sPos += HALFPI-gamma;                     // positive openness
+      sOpn += (HALFPI-gamma)-(HALFPI+delta);    // PO - NO, i.e. -(gamma+delta)
+    }
+    SVF[d]=sSvf/HDIRS;
+    POS[d]=sPos/HDIRS;                          // radians
+    OPN[d]=sOpn/HDIRS;                          // radians; >0 convex, <0 concave
+  }}
+}
+function needHorizon(prog){ if(!SVF) horizonScan(prog); }
 function hillshadeAt(d,az,alt){
   const a=az*Math.PI/180,e=alt*Math.PI/180;
   const sx=Math.sin(a)*Math.cos(e),sy=Math.sin(e),sz=-Math.cos(a)*Math.cos(e);
@@ -1245,17 +1255,6 @@ function classify(f){
   if(f.circ>0.42&&f.relief>0.3) return 'Possible Mound';
   return 'Uncertain Terrain Anomaly';
 }
-/* Weights are calibrated so a candidate must earn High (>=70), not inherit it.
-   An earlier version handed every candidate a constant 56 (base 28 + a
-   hillshade term that scored 16/16 for essentially any relief + a clustering
-   bonus of 12), which put 100% of hits in the High band.
-
-   Hillshade persistence is deliberately worth little: `dirs` comes back 8/8 for
-   almost any relief, so it barely discriminates. The illumination-independent
-   pair — openness and sky-view contrast against the surrounding ground — now
-   carries that weight instead, which is what "detectable across multiple
-   representations" is supposed to mean. Openness saturates at 5deg of contrast
-   and sky-view at 0.06, both near the top of the observed range. */
 function score(f){
   let s=6;const up=[],down=[];
   const add=(v,max,l)=>{if(v>=max*0.55)up.push(l);s+=v;};
@@ -1288,12 +1287,15 @@ function altFor(f){
   if(f.circ>0.5) return 'Could be a natural knoll, an erosional remnant, a tree throw or a modern spoil pile.';
   return 'Could be natural microtopography or a modern ground disturbance.';
 }
-function runScan(){
-  needHorizon();
+function runScan(prog){
+  needHorizon(prog);
   const found=[];
   const broad=blur(Zm,Math.max(3,36/CELL),3);
   const T=GW*GH;
+  let done=0;
   SCALES.forEach(sc=>{
+    if(prog) prog(55+30*done/SCALES.length,'Local relief at '+sc.name+' scale');
+    done++;
     const sm=blur(Zm,Math.max(2,sc.rM/CELL),3);
     const LRM=new Float32Array(T);
     let m=0;for(let d=0;d<T;d++){LRM[d]=Zm[d]-sm[d];m+=LRM[d];}
@@ -1328,6 +1330,110 @@ function runScan(){
   for(const f of merged){f.type=classify(f);f.score=score(f);f.alt=altFor(f);}
   merged.sort((a,b)=>b.score-a.score);
   return merged.filter(f=>f.score>=22).slice(0,14);
+}
+function buildMSTP(){
+  const T=GW*GH, sq=new Float32Array(T);
+  for(let d=0;d<T;d++) sq[d]=Zm[d]*Zm[d];
+  const band=[];
+  for(const pair of MSTPBANDS){
+    const acc=new Float32Array(T);
+    for(const sM of pair){
+      const r=Math.max(1,sM/CELL);
+      const mean=blur(Zm,r,3), meanSq=blur(sq,r,3);
+      for(let d=0;d<T;d++){
+        const v=meanSq[d]-mean[d]*mean[d];
+        const sd=v>1e-9?Math.sqrt(v):0;
+        acc[d]+= sd>1e-6 ? (Zm[d]-mean[d])/sd : 0;
+      }
+    }
+    for(let d=0;d<T;d++) acc[d]/=pair.length;
+    band.push(acc);
+  }
+  // symmetric clip at +/-k standard deviations, then a mild lift
+  const out=new Uint8Array(T*4);
+  for(let d=0;d<T;d++){
+    for(let c=0;c<3;c++){
+      let v=(band[c][d]/MSTPK+1)*0.5;
+      v=Math.pow(Math.max(0,Math.min(1,v)),0.85);
+      out[d*4+c]=v*255;
+    }
+    out[d*4+3]=255;
+  }
+  return out;
+}
+function buildLRM(){
+  const T=GW*GH,sm=blur(Zm,Math.max(2,15/CELL),3),L=new Float32Array(T);
+  for(let d=0;d<T;d++) L[d]=Zm[d]-sm[d];
+  return L;
+}
+
+self.onmessage=function(ev){
+  const m=ev.data, id=m.id;
+  const prog=(pct,stage)=>self.postMessage({progress:pct,stage:stage});
+  try{
+    if(m.cmd==='dem'){
+      Zm=new Float32Array(m.Zm); GW=m.GW; GH=m.GH; CELL=m.CELL;
+      SVF=OPN=POS=null; grads();
+      self.postMessage({id:id});
+    } else if(m.cmd==='horizon'){
+      needHorizon(prog);
+      self.postMessage({id:id,svf:SVF.buffer,opn:OPN.buffer,pos:POS.buffer},
+        [SVF.buffer,OPN.buffer,POS.buffer]);
+      // the buffers were transferred away; keep the values by recomputing lazily
+      SVF=OPN=POS=null;
+    } else if(m.cmd==='lrm'){
+      const L=buildLRM();
+      self.postMessage({id:id,lrm:L.buffer},[L.buffer]);
+    } else if(m.cmd==='mstp'){
+      const b=buildMSTP();
+      self.postMessage({id:id,rgba:b.buffer},[b.buffer]);
+    } else if(m.cmd==='scan'){
+      const hits=runScan(prog);
+      prog(97,'Ranking candidates');
+      self.postMessage({id:id,hits:hits,svf:SVF.buffer,opn:OPN.buffer,pos:POS.buffer},
+        [SVF.buffer,OPN.buffer,POS.buffer]);
+      SVF=OPN=POS=null;
+    } else {
+      self.postMessage({id:id,err:'unknown command'});
+    }
+  }catch(e){ self.postMessage({id:id,err:(e&&e.message)||String(e)}); }
+};
+}
+
+/* Worker client. One in-flight request at a time is all the UI needs, so the
+   pending map is keyed by id and progress messages are routed to the overlay. */
+let _worker=null, _wseq=0;
+const _wpend=new Map();
+let onWorkerProgress=null;
+function theWorker(){
+  if(_worker) return _worker;
+  const src='('+scanWorkerBody.toString()+')()';
+  _worker=new Worker(URL.createObjectURL(new Blob([src],{type:'application/javascript'})));
+  _worker.onmessage=e=>{
+    const m=e.data;
+    if(m.progress!==undefined){ if(onWorkerProgress) onWorkerProgress(m.progress,m.stage); return; }
+    const p=_wpend.get(m.id);
+    if(p){ _wpend.delete(m.id); m.err?p.rej(new Error(m.err)):p.res(m); }
+  };
+  _worker.onerror=e=>{
+    for(const [,p] of _wpend) p.rej(new Error('worker failed'));
+    _wpend.clear();
+  };
+  return _worker;
+}
+function wpost(msg,transfer){
+  const id=++_wseq;
+  return new Promise((res,rej)=>{
+    _wpend.set(id,{res,rej});
+    theWorker().postMessage(Object.assign({id},msg),transfer||(msg.Zm?[msg.Zm]:[]));
+  });
+}
+/* Horizon products are held on the main thread only to build textures; the
+   worker transfers them out and recomputes if asked again. */
+async function needHorizon(){
+  if(SVF) return;
+  const r=await wpost({cmd:'horizon'});
+  SVF=new Float32Array(r.svf); OPN=new Float32Array(r.opn); POS=new Float32Array(r.pos);
 }
 
 /* ══ DEM readers ══ */
@@ -1899,15 +2005,17 @@ async function doScan(){
   if(document.body.classList.contains('scanning'))return;
   $('#scanbtn').disabled=true;$('#scantitle').textContent='Scanning Terrain…';
   document.body.classList.add('scanning');closeDetail();$('#bar').style.width='0%';
-  await stg('Reading bare-earth model',8);
-  await stg('Computing sky-view factor and openness',22);
-  try{needHorizon();}catch(e){}
-  await stg('Computing local relief at three scales',44);
-  await stg('Testing eight illumination directions',56);
-  let res=[];try{res=runScan();}catch(e){res=[];}
-  await stg('Measuring shape and symmetry',72);
-  await stg('Rejecting natural and modern forms',88);
-  await stg('Ranking candidates',97);
+  await stg('Reading bare-earth model',4);
+  // real progress from the worker, not a timed sequence
+  onWorkerProgress=(pct,stage)=>{$('#stage').textContent=stage;
+    $('#pct').textContent=Math.round(pct)+'%';$('#bar').style.width=pct+'%';};
+  let res=[];
+  try{
+    const r=await wpost({cmd:'scan'});
+    res=r.hits||[];
+    SVF=new Float32Array(r.svf); OPN=new Float32Array(r.opn); POS=new Float32Array(r.pos);
+  }catch(e){ res=[]; }
+  onWorkerProgress=null;
   hits=res;buildMarkers();buildList();
   await stg('Terrain Scan Complete',100);
   await new Promise(r=>setTimeout(r,420));
@@ -2044,22 +2152,28 @@ segBind('#theme',b=>setTheme(b.dataset.t));
 segBind('#attr',b=>{attr=b.dataset.a;recolor();});
 segBind('#sepby',b=>{sepBy=b.dataset.s;assignBands();hud();});
 segBind('#mode',b=>{mode=b.dataset.m;paintLegend();hud();});
-function buildShadeTex(v){
+async function buildShadeTex(v){
   if(v===3&&!lrmTex){
-    const T=GW*GH,sm=blur(Zm,Math.max(2,15/CELL),3),L=new Float32Array(T);
+    const r=await wpost({cmd:'lrm'});
+    const L=new Float32Array(r.lrm);
     let lo=1e9,hi=-1e9;
-    for(let d=0;d<T;d++){L[d]=Zm[d]-sm[d];if(L[d]<lo)lo=L[d];if(L[d]>hi)hi=L[d];}
+    for(let d=0;d<L.length;d++){if(L[d]<lo)lo=L[d];if(L[d]>hi)hi=L[d];}
     const m=Math.max(Math.abs(lo),Math.abs(hi))||1;
     lrmTex=packTex(L,-m,m,GW,GH);surfMat.uniforms.uLrm.value=lrmTex;surfMat.uniforms.uHasLrm.value=1;
   }
   if(v===9&&!mstpTex){
-    mstpTex=buildMSTP();
+    const r=await wpost({cmd:'mstp'});
+    const t=new THREE.DataTexture(new Uint8Array(r.rgba),GW,GH,THREE.RGBAFormat);
+    // three independent 8-bit channels, so hardware filtering is safe here
+    t.minFilter=t.magFilter=THREE.LinearFilter;
+    t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.needsUpdate=true;
+    mstpTex=t;
     surfMat.uniforms.uMstp.value=mstpTex;
     surfMat.uniforms.uHasAux.value=1;
   }
   // 4 sky-view, 5 openness, 7 VAT (sky-view + positive openness), 8 RRIM (openness)
   if(v===4||v===5||v===7||v===8){
-    needHorizon();
+    await needHorizon();
     if(!svfTex&&(v===4||v===7)){
       const [lo,hi]=pctRange(SVF,0.02,0.98);
       svfTex=packTex(SVF,lo,hi,GW,GH);
@@ -2080,9 +2194,21 @@ function buildShadeTex(v){
     surfMat.uniforms.uHasAux.value = 1;
   }
 }
-segBind('#shade',b=>{
+const HEAVY={3:'Local relief',4:'Sky-view factor',5:'Openness',
+             7:'VAT composite',8:'Red relief',9:'Multi-scale position'};
+segBind('#shade',async b=>{
   const v=+b.dataset.s;
-  buildShadeTex(v);
+  const needsWork = HEAVY[v] && ((v===3&&!lrmTex)||(v===9&&!mstpTex)||
+                    ((v===4||v===5||v===7||v===8)&&!SVF));
+  if(needsWork){
+    $('#scantitle').textContent='Building '+HEAVY[v]+'\u2026';
+    document.body.classList.add('scanning');
+    onWorkerProgress=(pct,stage)=>{$('#stage').textContent=stage||'Working';
+      $('#pct').textContent=Math.round(pct)+'%';$('#bar').style.width=pct+'%';};
+  }
+  try{ await buildShadeTex(v); }
+  catch(e){ /* leave the previous layer in place */ }
+  finally{ onWorkerProgress=null; document.body.classList.remove('scanning'); }
   surfMat.uniforms.uShade.value=v;
   if(mode==='points'){mode='surface';segSet('#mode','surface','m');}
   paintLegend();hud();

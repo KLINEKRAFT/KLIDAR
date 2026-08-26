@@ -38,8 +38,8 @@ Read top to bottom; it is organised in these blocks.
 | Mutable terrain grid | `GW, GH, CELL, SPANX, SPANZ, SPAN, Zm, Hn, gx, gz, slope, zMin, zMax, zRange`. All rebuilt by `installDEM()`. |
 | three.js setup | `scene` (points + surface), `overlay` (wireframe box + separation frames), `quadScene` (EDL composite). |
 | `installDEM(dem)` | The single entry point for new terrain. Downsamples, normalises, computes gradients, packs the height texture, rebuilds surface geometry and bounding box, resets scan results, reframes the camera. |
-| Horizon products | `HDIRS`, `HRADIUS`, `horizonScan`, `needHorizon` → `SVF`, `OPN`, `POS`. Built on demand, invalidated by `installDEM`. |
-| Scan | `SCALES`, `blur`, `components`, `analyse`, `classify`, `score`, `altFor`, `runScan`. |
+| Analysis worker | `scanWorkerBody` — gradients, `blur`, `horizonScan`, `buildLRM`, `buildMSTP`, `components`, `analyse`, `classify`, `score`, `altFor`, `runScan`. Stringified into a Blob worker; **never called on the main thread**. |
+| Worker client | `theWorker`, `wpost`, `needHorizon`, `onWorkerProgress`. `SVF`/`OPN`/`POS` on the main thread are copies returned by the worker, used only to build textures. |
 | DEM readers | `parseASC` (zero-dependency), `parseTIFF` (lazy geotiff.js), `parseLAS` (lazy laz-perf for `.laz`). |
 | Display plumbing | `recolor`, `paintRamp`, `paintLegend`, `applyVex`, `updateSun`, `setTheme`. |
 | UI | Glass sheet with drag-resize + snap, candidate detail sheet, marker projection. Above 900px the same sheet becomes a collapsible left rail — one open/close state, only the axis changes. `--rail`, `--plateL` and `--sheet` keep the plate readouts clear of it. |
@@ -117,10 +117,20 @@ vertex normals.
   `getPoint` — compare `HEAPU8.buffer` each iteration and rebuild.
 - **Display points are capped at `LASMAXPTS`** (1.2M) by striding. The DEM still
   uses every ground return; only the drawn cloud is thinned.
-- **The scan blocks the main thread.** On a real 500² tile the horizon scan is
-  ~590 ms and `runScan` ~4 s, both behind the progress overlay. The feature scan
-  is the bottleneck, not the horizon products. Moving both to a Worker is the
-  remaining Phase 4 item.
+- **All heavy analysis runs in a Worker.** `scanWorkerBody` is stringified into
+  a Blob URL, so the single-file build survives. It owns `Zm` and derives
+  gradients, horizon products, local relief and MSTP itself; the main thread
+  sends a copy of `Zm` on `installDEM` and asks for results. Measured on a real
+  500² tile, the longest main-thread stall during a scan went from 718 ms to
+  59 ms — the same as idle.
+- **The worker transfers its result buffers away.** `SVF`/`OPN`/`POS` are
+  neutered on the worker side after each reply and set back to null, so the next
+  request recomputes. That is deliberate: transferring is free, copying is not,
+  and a stale cache across a DEM change would be worse.
+- **Anything touching `blur` or the horizon products is async now.**
+  `buildShadeTex` and the `#shade` handler both await, and heavy modes put the
+  progress overlay up. Adding a shading mode that needs new derived data means
+  adding a worker command, not a main-thread function.
 - **Horizon rays step at 1.35x growth, not every cell.** Near cells carry the
   angular detail; far ones barely move the horizon. Measured against a
   brute-force sweep on real data: 1.55x faster, SVF RMS error 0.0008 and
